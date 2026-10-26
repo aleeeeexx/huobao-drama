@@ -57,6 +57,12 @@ export interface VideoProviderAdapter {
   parsePollResponse(result: any): VideoPollResponse
 
   extractVideoUrl(result: any): string | null
+
+  /**
+   * 把上游返回的相对地址补成可下载的绝对地址。
+   * codecc / Grok 完成时可能只给 /v1/videos/{id}/content，且下载需要同一把密钥。
+   */
+  resolveDownload?(config: AIConfig, videoUrl: string): { url: string; headers?: Record<string, string> }
 }
 
 // ============ 通用类型 ============

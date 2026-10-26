@@ -10,15 +10,19 @@
           </div>
           <div class="brand-text">
             <span class="brand-name">火宝短剧</span>
-            <span class="brand-sub">Huobao Shorts</span>
+            <span class="brand-sub">织界</span>
           </div>
         </button>
       </div>
 
       <nav class="header-nav">
-        <NuxtLink to="/" class="nav-link" :class="{ active: route.path === '/' }">
+        <NuxtLink to="/" class="nav-link" :class="{ active: route.path === '/' || route.path.startsWith('/play') }">
+          <BookOpen :size="15" :stroke-width="1.8" />
+          <span>{{ t('layout.nav.play') }}</span>
+        </NuxtLink>
+        <NuxtLink to="/studio" class="nav-link" :class="{ active: route.path === '/studio' || route.path.startsWith('/drama') }">
           <LayoutGrid :size="15" :stroke-width="1.8" />
-          <span>{{ t('layout.nav.projects') }}</span>
+          <span>{{ t('layout.nav.studio') }}</span>
         </NuxtLink>
         <NuxtLink to="/settings" class="nav-link" :class="{ active: route.path === '/settings' }">
           <Settings :size="15" :stroke-width="1.8" />
@@ -56,7 +60,7 @@
 </template>
 
 <script setup>
-import { LayoutGrid, Settings, TriangleAlert, Github } from 'lucide-vue-next'
+import { BookOpen, LayoutGrid, Settings, TriangleAlert, Github } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { aiConfigAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/brand-logo.png'

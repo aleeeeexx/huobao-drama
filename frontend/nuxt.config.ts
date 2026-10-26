@@ -22,6 +22,11 @@ export default defineNuxtConfig({
           path: '/drama/:id/episode/:episodeNumber',
           file: fileURLToPath(new URL('./app/views/drama/episode.vue', import.meta.url)),
         },
+        {
+          name: 'rpg-play',
+          path: '/play/:sessionId',
+          file: fileURLToPath(new URL('./app/views/rpg/play.vue', import.meta.url)),
+        },
       )
     },
   },

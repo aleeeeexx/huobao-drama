@@ -33,6 +33,8 @@
   },
   "layout": {
     "nav": {
+      "play": "플레이",
+      "studio": "제작",
       "projects": "프로젝트",
       "settings": "설정"
     },

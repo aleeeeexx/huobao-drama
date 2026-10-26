@@ -21,6 +21,7 @@ export function safeTaskError(error: unknown): string {
 /** 下载到临时文件，校验容器头后原子改名；同任务重复恢复不会新增媒体文件。 */
 export async function downloadVideo(url: string, taskId: number, options: {
   root?: string; attempts?: number; timeoutMs?: number; retryDelayMs?: number; maxBytes?: number
+  headers?: Record<string, string>
 } = {}): Promise<string> {
   const parsed = new URL(url)
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new VideoDownloadError('download_url', 'Invalid video URL protocol')
@@ -33,7 +34,7 @@ export async function downloadVideo(url: string, taskId: number, options: {
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const signal = AbortSignal.timeout(options.timeoutMs ?? 120_000)
-      const resp = await fetch(url, { signal })
+      const resp = await fetch(url, { signal, headers: options.headers })
       if (!resp.ok) {
         await resp.body?.cancel()
         throw new VideoDownloadError('download_http', `Video download HTTP ${resp.status}`, [408, 429].includes(resp.status) || resp.status >= 500)

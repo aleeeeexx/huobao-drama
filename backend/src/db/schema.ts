@@ -293,3 +293,50 @@ export const appSettings = sqliteTable('app_settings', {
   value: text('value').notNull(),
   updatedAt: text('updated_at').notNull(),
 })
+
+/** 织界预设/玩家自定义世界 */
+export const rpgWorlds = sqliteTable('rpg_worlds', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  slug: text('slug').notNull(),
+  title: text('title').notNull(),
+  tagline: text('tagline'),
+  premise: text('premise').notNull(),
+  genre: text('genre'),
+  style: text('style'),
+  isPreset: integer('is_preset', { mode: 'boolean' }).default(true),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+/** 一局游戏。drama/episode 是背后的短剧工程，供续写与生图生视频管线使用 */
+export const rpgSessions = sqliteTable('rpg_sessions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  worldId: integer('world_id').notNull(),
+  dramaId: integer('drama_id').notNull(),
+  episodeId: integer('episode_id').notNull(),
+  title: text('title').notNull(),
+  status: text('status').notNull().default('active'),
+  worldState: text('world_state').notNull(),
+  turnCount: integer('turn_count').default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const rpgTurns = sqliteTable('rpg_turns', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  sessionId: integer('session_id').notNull(),
+  turnIndex: integer('turn_index').notNull(),
+  playerMode: text('player_mode'),
+  playerText: text('player_text'),
+  choiceId: text('choice_id'),
+  narrative: text('narrative').notNull(),
+  choices: text('choices').notNull(),
+  worldState: text('world_state').notNull(),
+  sceneId: integer('scene_id'),
+  storyboardId: integer('storyboard_id'),
+  imageTaskId: integer('image_task_id'),
+  videoTaskId: integer('video_task_id'),
+  imageUrl: text('image_url'),
+  videoUrl: text('video_url'),
+  createdAt: text('created_at').notNull(),
+})

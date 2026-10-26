@@ -178,3 +178,12 @@ export const serverUpdateAPI = {
   check: () => api.post('/server-update/check'),
   apply: () => api.post('/server-update/apply'),
 }
+
+export const rpgAPI = {
+  worlds: () => api.get('/rpg/worlds'),
+  sessions: () => api.get('/rpg/sessions'),
+  createSession: (data: any) => api.post('/rpg/sessions', data),
+  session: (id: number) => api.get(`/rpg/sessions/${id}`),
+  illustrate: (id: number) => api.post(`/rpg/sessions/${id}/image`),
+  film: (id: number) => api.post(`/rpg/sessions/${id}/video`),
+}

@@ -86,6 +86,40 @@ data/       — 生成资源文件与 SQLite 数据库
 | `storyboard_breaker` | 剧本 → 分镜序列拆解 |
 | `prompt_generator` | 角色/场景/道具图片提示词 + 分镜视频提示词生成 |
 
+### 🎮 织界：玩家向互动 RPG
+
+织界是给玩家用的一层。短剧制作台还在 `/studio`，四个 Agent（剧本改写、资产提取、分镜、提示词）和图片/视频任务管线都保留。
+
+玩家流程：
+
+1. 打开首页，选择预设世界，或自己写一个世界设定。
+2. 说书人流式写下开场，并给出三条剧情走向。
+3. 点选一条走向，**或**在输入框写下自己的行动。两种方式都会推进下一幕。
+4. 右侧记下当前场景、人物、物品和事务。
+5. 对当前场面可以「生成插画」和「生成影像」。插画走现有图片任务，影像会先落一条分镜再走现有视频任务。每一幕正文会写入对应短剧的剧集，并异步交给 `script_rewriter` 续写成剧本。
+
+本地把 codecc 配进 `backend/.env`（从 `backend/.env.example` 复制，不要提交密钥）后启动，服务会写入三条 OpenAI 兼容配置。
+
+```bash
+cd backend && cp .env.example .env
+# 编辑 .env，填入 CODECC_API_KEY、CODECC_BASE_URL、三个模型名
+
+cd backend && npm install && npm run dev
+cd frontend && npm install && npm run dev
+```
+
+- 玩家页：`http://localhost:3013`
+- 制作台：`http://localhost:3013/studio`
+- 后端：`http://localhost:5679/api/v1`
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `CODECC_API_KEY` | 空 | 有值时启动写入文本/图片/视频配置 |
+| `CODECC_BASE_URL` | `https://codecc.cc` | 不带 `/v1`，程序自行拼接 |
+| `CODECC_TEXT_MODEL` | `grok-4.7` | 叙事模型 |
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 场面插画 |
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 场面影像 |
+
 ### 🌐 多语言界面
 
 界面内置 **中文 / English / 日本語 / 한국어** 四种语言，并可全局设置 AI 生成内容的语言。
@@ -96,7 +130,7 @@ data/       — 生成资源文件与 SQLite 数据库
 |---|---|
 | **文本** | OpenAI(兼容接口)、Gemini |
 | **图片** | OpenAI、Gemini、火山引擎 |
-| **视频** | 火山引擎 Seedance 2.0(标准 / Fast / Mini)、MiniMax H3、阿里云百炼 Wan 3.0 (Prime / 标准) |
+| **视频** | 火山引擎 Seedance 2.0(标准 / Fast / Mini)、MiniMax H3、阿里云百炼 Wan 3.0 (Prime / 标准)、OpenAI 兼容视频（codecc 上的 Grok Imagine） |
 
 ---
 
@@ -126,8 +160,13 @@ data/       — 生成资源文件与 SQLite 数据库
 | `FRONTEND_DIST` | `frontend/dist` | 前端静态产物目录 |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | npm 内置二进制 | 自定义 ffmpeg/ffprobe 可执行文件路径 |
 | `PUBLIC_BASE_URL` | — | Seedance 引用本地参考资源时所需的公网地址（服务器部署用） |
+| `CODECC_API_KEY` | 空 | 织界：有值时启动写入 codecc 文本/图片/视频配置。只放在 `backend/.env` |
+| `CODECC_BASE_URL` | `https://codecc.cc` | codecc 根地址，不要自带 `/v1` |
+| `CODECC_TEXT_MODEL` | `grok-4.7` | 织界叙事模型 |
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 织界场面插画 |
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 织界场面影像 |
 
-> **说明**：AI 服务的 API Key、Base URL 和模型参数全部在 Web 界面的「设置」页配置并入库，不在配置文件/环境变量中维护。
+> **说明**：制作台里的 AI 服务仍可在「设置」页维护。织界玩家模式优先读 `backend/.env` 的 `CODECC_*`，启动时写入数据库；不要把真实密钥提交到 git。
 
 ### 📥 安装依赖
 
