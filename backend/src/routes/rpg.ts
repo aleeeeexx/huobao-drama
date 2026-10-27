@@ -1,5 +1,5 @@
 /**
- * 织界玩家接口。续写文本走 SSE；插画和视频复用 sys_task。
+ * 织界玩家接口。续写文本由 script_rewriter 流式输出，经 SSE 推给页面；插画和视频复用 sys_task。
  */
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'

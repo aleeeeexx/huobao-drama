@@ -1,14 +1,11 @@
 /**
- * 织界回合的纯逻辑：玩家行动解析、叙事流拆分、世界状态合并。
- * 不访问数据库，方便单测。
+ * 织界回合的纯逻辑：玩家行动解析、叙事流拆分、从短剧资产投影档案。
+ * 不访问数据库，方便单测。续写、提取、分镜和提示词不在这里调用模型。
  */
-
-import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
 
 export const RPG_STATE_SENTINEL = '<<<RPG_STATE>>>'
 const FREE_TEXT_MAX = 400
-const LIVE_ACTION_STILL = '单幅真人电影剧照，主体清晰，真实演员与实景，不要文字，不要水印，不要分镜格子，不要动漫，不要二次元，不要卡通，不要插画'
-const LIVE_ACTION_SHOT = '连续的真人电影镜头，真实演员表演，实景与电影摄影，不要动画，不要二次元，不要卡通，不要插画'
+const STILL_FRAME_NOTE = '单幅真人电影剧照，真实演员在实景中表演，主体清晰，不要文字，不要水印，不要分镜格子，不要动漫，不要二次元，不要卡通，不要插画'
 
 export interface RpgChoice {
   id: string
@@ -161,23 +158,109 @@ export function salvageTrailingState(text: string): { narrative: string; stateRa
   return { narrative: text.trim(), stateRaw: '' }
 }
 
-export function parseStatePayload(raw: string, previous: RpgWorldState): { state: RpgWorldState; choices: RpgChoice[] } {
-  const parsed = parseJsonObject(raw)
-  const patch = normalizeStatePatch(parsed)
+/** 只读取剧情分支。角色、场景、物品以提取 Agent 写入的资产为准，不采用这段 JSON。 */
+export function choicesFromPayload(raw: string): RpgChoice[] {
+  return normalizeChoices(parseJsonObject(raw)?.choices)
+}
+
+export interface ProjectedCharacter {
+  name: string
+  role?: string | null
+  description?: string | null
+  appearance?: string | null
+  styling?: string | null
+}
+
+export interface ProjectedScene {
+  id: number
+  location: string
+  time?: string | null
+  prompt?: string | null
+  lighting?: string | null
+  updatedAt?: string | null
+}
+
+export interface ProjectedProp {
+  name: string
+  type?: string | null
+  description?: string | null
+}
+
+/**
+ * 把短剧资产投影成玩家档案。
+ * 事务没有对应的工作室实体，沿用上一幕已记下的条目。
+ */
+export function projectWorldState(
+  previous: RpgWorldState,
+  assets: { characters: ProjectedCharacter[]; scenes: ProjectedScene[]; props: ProjectedProp[] },
+  preferredSceneId?: number | null,
+): { state: RpgWorldState; sceneId: number | null } {
+  const scene = pickScene(assets.scenes, preferredSceneId)
+  const sceneState: RpgSceneState = scene
+    ? {
+      location: clip(scene.location || '未知地点', 40) || '未知地点',
+      time: clip(scene.time || '此时', 20) || '此时',
+      summary: clip(scene.prompt || '', 160),
+      atmosphere: clip(scene.lighting || '', 80),
+    }
+    : previous.scene
+  const characters = assets.characters.length
+    ? assets.characters.slice(0, 8).map(projectCharacter).filter(item => item.name)
+    : previous.characters
+  const items = assets.props.length
+    ? assets.props.slice(0, 8).map(projectProp).filter(item => item.name)
+    : previous.items
   return {
-    state: mergeWorldState(previous, patch),
-    choices: normalizeChoices(parsed?.choices),
+    sceneId: scene?.id ?? null,
+    state: {
+      scene: sceneState,
+      characters,
+      items,
+      quests: previous.quests,
+      memory: sceneState.summary || previous.memory,
+    },
   }
 }
 
-export function mergeWorldState(previous: RpgWorldState, patch: Partial<RpgWorldState>): RpgWorldState {
-  return {
-    scene: patch.scene ?? previous.scene,
-    characters: patch.characters ?? previous.characters,
-    items: patch.items ?? previous.items,
-    quests: patch.quests ?? previous.quests,
-    memory: patch.memory ?? previous.memory,
-  }
+export function sceneIdFromScreenplay(
+  script: string,
+  turnIndex: number,
+  scenes: Array<{ id: number; location: string }>,
+): number | null {
+  const header = script.match(new RegExp(`##\\s*S${turnIndex}\\b[^\\n]*`))
+  if (!header) return null
+  const matched = scenes.find(scene => scene.location && header[0].includes(scene.location))
+  return matched?.id ?? null
+}
+
+export function scriptHasScene(script: string, turnIndex: number): boolean {
+  return new RegExp(`##\\s*S${turnIndex}\\b`).test(script || '')
+}
+
+export function narrativeFromScreenplay(script: string, turnIndex: number): string {
+  const match = (script || '').match(new RegExp(`##\\s*S${turnIndex}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s*S\\d+\\b|$)`))
+  if (!match) return ''
+  return match[1].replace(/^\s*（玩家行动）[^\n]*\n+/, '').trim()
+}
+
+export function stripChoiceTail(script: string): string {
+  const marker = script.indexOf(RPG_STATE_SENTINEL)
+  if (marker === -1) return script
+  return script.slice(0, marker).trim()
+}
+
+export function visibleNarrative(text: string): string {
+  return text.replace(/^##\s*S\d+[^\n]*\n+/, '').trim()
+}
+
+/** 模型若把场景头写进回复，回退补剧本时沿用这个地点，而不是上一幕的地点。 */
+export function locationFromNarrativeHeader(text: string): { location: string; time: string } | null {
+  const match = text.match(/^##\s*S\d+\s*\|[^|\n]*·\s*([^|\n]+?)\s*\|\s*([^\n]+)/)
+  if (!match) return null
+  const location = match[1].trim()
+  const time = match[2].trim()
+  if (!location) return null
+  return { location, time: time || '此时' }
 }
 
 export function formatScreenplayScene(
@@ -193,28 +276,97 @@ export function formatScreenplayScene(
   return `## S${turnIndex} | ${interior} · ${location} | ${time}\n\n${action}${narrative.trim()}\n`
 }
 
-export function buildSceneImagePrompt(state: RpgWorldState): string {
-  const people = state.characters
+/**
+ * 插画提示词由场景最终提示词（prompt_generator，已含项目风格）和资产外貌拼成。
+ * 场景 Agent 的最终提示词是空镜；这里补上本幕出场的人，避免玩家插画变成无人设定图。
+ */
+export function assembleStillPrompt(input: {
+  stylePrompt: string
+  sceneFinalPrompt: string
+  location: string
+  time: string
+  scenePrompt: string
+  lighting: string
+  characters: Array<{ name: string; appearance?: string; role?: string }>
+  narrative: string
+}): string {
+  const style = input.stylePrompt.trim()
+  const plate = input.sceneFinalPrompt.trim()
+  const head = plate
+    ? (style && !plate.startsWith(style) ? `${style}，\n${plate}` : plate)
+    : [style, input.location, input.time, input.scenePrompt, input.lighting].filter(part => part && part.trim()).join('，')
+  const people = input.characters
     .slice(0, 3)
-    .map(character => `${character.name}（${character.appearance || character.role || '人物'}）`)
+    .map(character => {
+      const name = clip(character.name || '', 20)
+      if (!name) return ''
+      return `${name}（${clip(character.appearance || character.role || '人物', 80)}）`
+    })
+    .filter(Boolean)
     .join('，')
   return [
-    LIVE_ACTION_CINEMATIC_STYLE.prompt,
-    `场景：${state.scene.location}，${state.scene.time}`,
-    state.scene.summary,
-    state.scene.atmosphere ? `光线与氛围：${state.scene.atmosphere}` : '',
+    head,
+    STILL_FRAME_NOTE,
     people ? `画面中的人物：${people}` : '',
-    LIVE_ACTION_STILL,
+    input.narrative ? `这一幕：${clip(input.narrative, 180)}` : '',
   ].filter(Boolean).join('\n')
 }
 
-export function buildSceneVideoPrompt(state: RpgWorldState, narrative: string): string {
-  const motion = clip(state.scene.summary || narrative, 180)
+export function buildPlayRewriteMessage(input: {
+  worldTitle: string
+  genre: string
+  premise: string
+  actionLine: string
+  turnIndex: number
+  existingScript: string
+  recent: string
+}): string {
   return [
-    LIVE_ACTION_CINEMATIC_STYLE.prompt,
-    `0-3秒：${state.scene.location}，${state.scene.atmosphere || '自然电影光'}，实拍镜头缓慢推进，看清真实环境与人物。`,
-    `3-6秒：${motion}`,
-    LIVE_ACTION_SHOT,
+    '这是互动短剧「织界」的一回合。你仍是剧本改写 Agent：先读本集，再把本幕写入剧本。不要绕过工具直接结束。',
+    `世界：${input.worldTitle}`,
+    input.genre ? `类型：${input.genre}` : '',
+    `设定：${input.premise}`,
+    input.recent ? `最近剧情：\n${input.recent}` : '',
+    input.existingScript
+      ? `已保存的剧本（续写时整段保留，只在末尾追加本幕）：\n${input.existingScript}`
+      : '还没有已保存的剧本。',
+    input.actionLine,
+    '请按顺序完成：',
+    '1. 调用 read_episode_script 读取当前集正文。',
+    `2. 回复正文只写给玩家看的第 ${input.turnIndex} 幕：简体中文，第二人称「你」，280 到 420 字，一段或两段。不要写场景头，不要复述旧剧本，不要写「选项」三个字。`,
+    `3. 正文结束后另起一行，只输出一次 ${RPG_STATE_SENTINEL}，然后输出 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。恰好 3 条，方向不同。不要用 markdown 代码块。不要在 JSON 里写角色、物品或场景；那些由提取 Agent 从剧本里读取。`,
+    `4. 调用 save_script 保存完整剧本：已有场景全部保留，并追加一个场景，场景头为 ## S${input.turnIndex} | 内景或外景 · 地点 | 时间。格式化剧本只放进 save_script，不要把分隔符和 JSON 写进剧本。不要替玩家写结局。`,
+  ].filter(Boolean).join('\n\n')
+}
+
+export function buildPlayStoryboardMessage(input: {
+  turnIndex: number
+  narrative: string
+  screenplay: string
+  videoLabel: string
+  characters: Array<{ id: number; name: string }>
+  scenes: Array<{ id: number; location: string; time?: string | null }>
+  props: Array<{ id: number; name: string }>
+}): string {
+  const characters = input.characters.length
+    ? input.characters.map(item => `${item.name}(ID:${item.id})`).join('、')
+    : '（当前集还没有角色）'
+  const scenes = input.scenes.length
+    ? input.scenes.map(item => `${item.location} · ${item.time || '未设时间'}(ID:${item.id})`).join('、')
+    : '（当前集还没有场景）'
+  const props = input.props.length
+    ? input.props.map(item => `${item.name}(ID:${item.id})`).join('、')
+    : '（当前集还没有道具）'
+  return [
+    `请只为第 ${input.turnIndex} 幕追加 1 个分镜，shot_number 必须是 ${input.turnIndex}。`,
+    '不要把 replace_existing 设为 true，不要删除或改写其他分镜号。',
+    `本次视频模型：${input.videoLabel}。请按该模型的特性与时长限制写 video_prompt。`,
+    `当前集已有角色：${characters}`,
+    `当前集已有场景：${scenes}`,
+    `当前集已有道具：${props}`,
+    '绑定要求与制作台拆分相同：character_ids、scene_id、prop_ids 只能来自上面的 ID。有角色出场就要绑定，没有道具可传空数组。',
+    '这一幕剧本：',
+    input.screenplay || input.narrative,
   ].join('\n')
 }
 
@@ -248,53 +400,29 @@ function normalizeChoices(value: unknown): RpgChoice[] {
   return choices.map((choice, index) => ({ ...choice, id: choice.id || `c${index + 1}` }))
 }
 
-function normalizeStatePatch(value: unknown): Partial<RpgWorldState> {
-  if (!value || typeof value !== 'object') return {}
-  const record = value as Record<string, unknown>
-  const patch: Partial<RpgWorldState> = {}
-  if (record.scene && typeof record.scene === 'object') {
-    const scene = record.scene as Record<string, unknown>
-    patch.scene = {
-      location: clip(String(scene.location || '未知地点'), 40) || '未知地点',
-      time: clip(String(scene.time || '此时'), 20) || '此时',
-      summary: clip(String(scene.summary || ''), 160),
-      atmosphere: clip(String(scene.atmosphere || ''), 80),
-    }
+function pickScene(scenes: ProjectedScene[], preferredSceneId?: number | null): ProjectedScene | null {
+  if (!scenes.length) return null
+  if (preferredSceneId) {
+    const preferred = scenes.find(scene => scene.id === preferredSceneId)
+    if (preferred) return preferred
   }
-  if (Array.isArray(record.characters)) patch.characters = record.characters.slice(0, 8).map(normalizeCharacter).filter(item => item.name)
-  if (Array.isArray(record.items)) patch.items = record.items.slice(0, 8).map(normalizeItem).filter(item => item.name)
-  if (Array.isArray(record.quests)) patch.quests = record.quests.slice(0, 6).map(normalizeQuest).filter(item => item.title)
-  if (typeof record.memory === 'string') patch.memory = clip(record.memory, 400)
-  return patch
+  return [...scenes].sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0]
 }
 
-function normalizeCharacter(value: unknown): RpgCharacter {
-  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+function projectCharacter(row: ProjectedCharacter): RpgCharacter {
   return {
-    name: clip(String(record.name || ''), 20),
-    role: clip(String(record.role || ''), 20),
-    status: clip(String(record.status || ''), 40),
-    appearance: clip(String(record.appearance || ''), 80),
+    name: clip(row.name || '', 40),
+    role: clip(row.role || '', 40),
+    status: clip(row.description || '', 120),
+    appearance: clip([row.appearance, row.styling].filter(Boolean).join('，'), 200),
   }
 }
 
-function normalizeItem(value: unknown): RpgItem {
-  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+function projectProp(row: ProjectedProp): RpgItem {
   return {
-    name: clip(String(record.name || ''), 20),
-    holder: clip(String(record.holder || record.owner || ''), 20),
-    description: clip(String(record.description || ''), 80),
-  }
-}
-
-function normalizeQuest(value: unknown): RpgQuest {
-  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
-  const statusRaw = String(record.status || 'active')
-  const status = statusRaw === 'done' || statusRaw === 'failed' ? statusRaw : 'active'
-  return {
-    title: clip(String(record.title || record.name || ''), 24),
-    status,
-    detail: clip(String(record.detail || ''), 80),
+    name: clip(row.name || '', 40),
+    holder: clip(row.type || '', 40),
+    description: clip(row.description || '', 200),
   }
 }
 

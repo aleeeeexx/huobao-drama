@@ -2,10 +2,10 @@
  * 资产提取任务 — 异步执行，按「集 × 类型」粒度跟踪
  * 角色 / 场景 / 道具 可分别单独提取，同一集的不同类型可并行
  * 任务状态为进程内内存态：后端重启后运行中的任务状态丢失（Agent 调用本身已被中断）
+ * 织界回合也调用 runExtraction，与制作台共用 extractor Agent。
  */
-import { mastra } from '../mastra/index.js'
-import { buildAgentRequestContext } from '../agents/context.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { runStudioAgent } from './agent-runner.js'
 
 export type ExtractTarget = 'characters' | 'scenes' | 'props'
 export const EXTRACT_TARGETS: ExtractTarget[] = ['characters', 'scenes', 'props']
@@ -27,8 +27,45 @@ const EXTRACT_MESSAGES: Record<ExtractTarget, string> = {
   props: '请从本集剧本中提取关键道具——必须同时满足：① 直接推动剧情（出现/交接/损坏/发现会引发情节转折，如凶器、信物、关键文件、定情礼物、证据）；② 值得单独生成白底单品图（分镜会给它特写或反复出现）。判定三问任一答"否"即放弃：删掉它剧情依然成立吗？它只是随手使用的日常物品（手机、筷子、水杯）吗？它是场景陈设（桌椅、灯具）吗？宁可少提不要多提，一集通常 0-3 个，超过 3 个只保留最重要的 3 个，没有就一个都不提取（save_dedup_props 传空数组）。description 只记录物品外貌。先用 read_existing_props 读取已有道具去重，再用 save_dedup_props 保存。本次只提取道具，不要提取角色和场景。',
 }
 
+export interface ExtractionOptions { model?: string; configId?: number }
+
+/** 跑完一类资产的提取 Agent。制作台的异步任务和织界回合都走这里。 */
+export async function runExtraction(
+  episodeId: number,
+  dramaId: number,
+  target: ExtractTarget,
+  opts: ExtractionOptions = {},
+): Promise<void> {
+  const result = await runStudioAgent({
+    agentType: 'extractor',
+    episodeId,
+    dramaId,
+    message: EXTRACT_MESSAGES[target],
+    maxSteps: 20,
+    model: opts.model,
+    configId: opts.configId,
+    onStepFinish: (step: any) => {
+      const tools = (step?.toolCalls || [])
+        .map((toolCall: any) => toolCall?.toolName || toolCall?.payload?.toolName)
+        .filter(Boolean)
+      logTaskProgress('Extract', `${target}-step`, {
+        episodeId,
+        tools: tools.length ? tools.join(',') : undefined,
+        text: (step?.text || '').slice(0, 200) || undefined,
+      })
+    },
+  })
+  const toolNames = (result.raw?.toolCalls || []).map((toolCall: any) => toolCall?.toolName).filter(Boolean)
+  logTaskSuccess('Extract', target, {
+    episodeId,
+    steps: result.raw?.steps?.length,
+    toolCalls: toolNames.join(',') || undefined,
+    reply: (result.text || '').slice(0, 300) || undefined,
+  })
+}
+
 /** 启动异步提取任务（立即返回）；同集同类型已在运行时返回 false；可指定文本模型覆盖 */
-export function startExtraction(episodeId: number, dramaId: number, target: ExtractTarget, opts: { model?: string; configId?: number } = {}): boolean {
+export function startExtraction(episodeId: number, dramaId: number, target: ExtractTarget, opts: ExtractionOptions = {}): boolean {
   const key = keyOf(episodeId, target)
   if (tasks.get(key)?.status === 'running') return false
 
@@ -36,41 +73,10 @@ export function startExtraction(episodeId: number, dramaId: number, target: Extr
   tasks.set(key, task)
 
   logTaskStart('Extract', target, { episodeId, dramaId, model: opts.model || undefined, configId: opts.configId || undefined })
-  ;(async () => {
-    const agent = mastra.getAgent('extractor')
-    if (!agent) throw new Error('提取 Agent 不可用')
-    const requestContext = buildAgentRequestContext({
-      episodeId,
-      dramaId,
-      modelOverride: opts.model || undefined,
-      textConfigId: opts.configId || undefined,
-    })
-    return agent.generate([{ role: 'user', content: EXTRACT_MESSAGES[target] }], {
-      maxSteps: 20,
-      requestContext,
-      // 逐步打印 Agent 进展：调用了哪些工具、输出了什么
-      onStepFinish: (step: any) => {
-        const tools = (step?.toolCalls || [])
-          .map((t: any) => t?.toolName || t?.payload?.toolName)
-          .filter(Boolean)
-        logTaskProgress('Extract', `${target}-step`, {
-          episodeId,
-          tools: tools.length ? tools.join(',') : undefined,
-          text: (step?.text || '').slice(0, 200) || undefined,
-        })
-      },
-    })
-  })()
-    .then((result: any) => {
+  void runExtraction(episodeId, dramaId, target, opts)
+    .then(() => {
       task.status = 'done'
       task.finished_at = new Date().toISOString()
-      const toolNames = (result?.toolCalls || []).map((t: any) => t?.toolName).filter(Boolean)
-      logTaskSuccess('Extract', target, {
-        episodeId,
-        steps: result?.steps?.length,
-        toolCalls: toolNames.join(',') || undefined,
-        reply: (result?.text || '').slice(0, 300) || undefined,
-      })
     })
     .catch((err: any) => {
       task.status = 'error'
