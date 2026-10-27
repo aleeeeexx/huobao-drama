@@ -9,7 +9,7 @@ import { getAbsolutePath } from '../utils/storage.js'
 import { downloadVideo, safeTaskError } from './video-download.js'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
+import { compressReferenceImage, downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
@@ -214,6 +214,14 @@ function parseTaskParams(raw: string | null | undefined): Record<string, any> {
   }
 }
 
+function multipartSummary(body: FormData): string {
+  const parts: string[] = []
+  for (const [key, value] of body.entries()) {
+    parts.push(typeof value === 'string' ? key : `${key} ${value.type} ${value.size}B`)
+  }
+  return `[multipart/form-data: ${parts.join(', ')}]`
+}
+
 function postProvider(url: string, method: string, headers: Record<string, string>, body: unknown) {
   const isMultipart = body instanceof FormData
   return fetch(url, {
@@ -297,7 +305,7 @@ async function processTask(id: number, config: AIConfig) {
     logTaskPayload(label, 'request payload', {
       id, method, url, headers,
       // multipart 表单（如 OpenAI /v1/images/edits）无法 JSON 化，记录字段摘要
-      body: isMultipart ? `[multipart/form-data: ${[...(body as FormData).keys()].join(', ')}]` : body,
+      body: isMultipart ? multipartSummary(body as FormData) : body,
     })
 
     let resp = await postProvider(url, method, headers, body)
@@ -646,15 +654,19 @@ async function normalizeReferenceImages(refs: string[] | null | undefined): Prom
   )
 
   const normalized = await Promise.all(deduped.map(async (value) => {
-    if (value.startsWith('data:image/')) return value
+    // data URL 也要再压一次。前面若已经塞进原图，这里不能原样上传。
+    if (value.startsWith('data:image/')) {
+      try {
+        return await compressReferenceImage(value)
+      } catch (err) {
+        logTaskWarn('ImageTask', 'reference-compress-failed', { error: (err as Error).message })
+        return null
+      }
+    }
     if (value.startsWith('static/') || value.startsWith('/static/')) {
       const localPath = value.startsWith('/static/') ? value.slice(1) : value
       try {
-        return await readImageAsCompressedDataUrl(localPath, {
-          maxWidth: 768,
-          maxHeight: 768,
-          quality: 68,
-        })
+        return await readImageAsCompressedDataUrl(localPath)
       } catch (err) {
         logTaskWarn('ImageTask', 'reference-read-failed', { path: localPath, error: (err as Error).message })
         return null
@@ -663,11 +675,7 @@ async function normalizeReferenceImages(refs: string[] | null | undefined): Prom
     // 远程 URL：下载压缩为 data URL，保证 multipart 上传（OpenAI edits）/ inline_data（Gemini）都可用
     if (/^https?:\/\//.test(value)) {
       try {
-        return await fetchImageAsCompressedDataUrl(value, {
-          maxWidth: 768,
-          maxHeight: 768,
-          quality: 68,
-        })
+        return await fetchImageAsCompressedDataUrl(value)
       } catch (err) {
         logTaskWarn('ImageTask', 'reference-fetch-failed', { url: value, error: (err as Error).message })
         return null

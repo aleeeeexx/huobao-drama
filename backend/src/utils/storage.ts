@@ -140,6 +140,23 @@ export async function fetchImageAsCompressedDataUrl(
   return compressImageAsDataUrl(Buffer.from(await resp.arrayBuffer()), options)
 }
 
+/** 参考图上传前的最长边和 JPEG 质量。原图常是数 MB 的 PNG，edits 的 multipart 吃不住。 */
+export const REFERENCE_IMAGE_MAX_EDGE = 1536
+export const REFERENCE_IMAGE_JPEG_QUALITY = 85
+
+/**
+ * 参考图统一压成 JPEG data URL。data URL、本地路径、Buffer 都走这里，
+ * 已是小图时不放大。调用方仍按原来的顺序提交这些图，只换线上的字节。
+ */
+export async function compressReferenceImage(input: string | Buffer): Promise<string> {
+  if (typeof input === 'string' && input.startsWith('data:')) {
+    const parsed = parseDataUrl(input)
+    if (!parsed) throw new Error('参考图 data URL 无法解析')
+    return compressImageAsDataUrl(Buffer.from(parsed.data, 'base64'))
+  }
+  return compressImageAsDataUrl(input)
+}
+
 /** sharp 输入 → 压缩 JPEG data URL（本地路径与远程下载共享同一压缩管线） */
 async function compressImageAsDataUrl(
   input: string | Buffer,
@@ -149,9 +166,9 @@ async function compressImageAsDataUrl(
     quality?: number
   } = {},
 ): Promise<string> {
-  const maxWidth = options.maxWidth ?? 768
-  const maxHeight = options.maxHeight ?? 768
-  const quality = options.quality ?? 68
+  const maxWidth = options.maxWidth ?? REFERENCE_IMAGE_MAX_EDGE
+  const maxHeight = options.maxHeight ?? REFERENCE_IMAGE_MAX_EDGE
+  const quality = options.quality ?? REFERENCE_IMAGE_JPEG_QUALITY
 
   const resized = sharp(input).rotate().resize({
     width: maxWidth,
