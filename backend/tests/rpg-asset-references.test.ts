@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { imageGatewayError, isRetryableImageGatewayStatus } from '../src/services/image-gateway.ts'
 import { assembleStillPrompt } from '../src/services/rpg/turn.ts'
 import {
   applyReferenceMarkers,
@@ -148,6 +149,23 @@ test('an existing reference image is not regenerated, and a failed plate is not 
     sceneId: 4,
     prompt: `${PLAY_STILL_PROMPT_MARK}，旧剧情图`,
   }), false)
+})
+
+test('image edits gateway failures stay visible instead of looking successful', () => {
+  assert.equal(isRetryableImageGatewayStatus(502), true)
+  assert.equal(isRetryableImageGatewayStatus(503), true)
+  assert.equal(isRetryableImageGatewayStatus(504), true)
+  assert.equal(isRetryableImageGatewayStatus(400), false)
+  assert.equal(imageGatewayError(502), '图片服务暂时不可用（HTTP 502），请稍后再试')
+
+  const generation = readFileSync(new URL('../src/services/generation.ts', import.meta.url), 'utf8')
+  const submit = generation.slice(
+    generation.indexOf('let resp = await postProvider'),
+    generation.indexOf('const result = await resp.json()'),
+  )
+  assert.match(submit, /type === 'image' && isRetryableImageGatewayStatus/)
+  assert.match(submit, /throw new Error\(imageGatewayError\(resp\.status\)\)/)
+  assert.match(submit, /adapter\.buildGenerateRequest/)
 })
 
 test('redraw starts a new still, while an in-flight still keeps its task', () => {

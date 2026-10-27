@@ -14,6 +14,7 @@ import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isRetryableImageGatewayStatus } from './image-gateway.js'
 
 type TaskType = 'image' | 'video'
 
@@ -213,6 +214,16 @@ function parseTaskParams(raw: string | null | undefined): Record<string, any> {
   }
 }
 
+function postProvider(url: string, method: string, headers: Record<string, string>, body: unknown) {
+  const isMultipart = body instanceof FormData
+  return fetch(url, {
+    method,
+    headers,
+    body: isMultipart ? (body as FormData) : JSON.stringify(body),
+    signal: AbortSignal.timeout(600_000),
+  })
+}
+
 async function processTask(id: number, config: AIConfig) {
   try {
     const [record] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, id))
@@ -289,12 +300,26 @@ async function processTask(id: number, config: AIConfig) {
       body: isMultipart ? `[multipart/form-data: ${[...(body as FormData).keys()].join(', ')}]` : body,
     })
 
-    const resp = await fetch(url, {
-      method,
-      headers,
-      body: isMultipart ? (body as FormData) : JSON.stringify(body),
-      signal: AbortSignal.timeout(600_000),
-    })
+    let resp = await postProvider(url, method, headers, body)
+    if (type === 'image' && isRetryableImageGatewayStatus(resp.status)) {
+      for (let attempt = 2; attempt <= IMAGE_GATEWAY_ATTEMPTS; attempt++) {
+        await resp.body?.cancel().catch(() => undefined)
+        logTaskWarn(label, 'gateway-retry', { id, status: resp.status, attempt })
+        await new Promise(resolve => setTimeout(resolve, IMAGE_GATEWAY_RETRY_MS))
+        const adapter = getImageAdapter(config.provider)
+        const resolvedReferenceImages = await normalizeReferenceImages(params.referenceImages)
+        ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
+          id: record.id,
+          model: record.model,
+          prompt: record.prompt,
+          size: params.size,
+          frameType: params.frameType,
+          referenceImages: resolvedReferenceImages.length ? JSON.stringify(resolvedReferenceImages) : null,
+        }))
+        resp = await postProvider(url, method, headers, body)
+        if (!isRetryableImageGatewayStatus(resp.status)) break
+      }
+    }
 
     // Firemux 在响应头提供内部任务编号；即使 JSON 响应体中断也能查询原任务。
     const gatewayTaskId = resp.headers.get('X-Firemux-Task-Id') || resp.headers.get('X-Huobao-Task-Id')
@@ -303,7 +328,13 @@ async function processTask(id: number, config: AIConfig) {
       record.taskId = gatewayTaskId
     }
 
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    if (!resp.ok) {
+      if (type === 'image' && isRetryableImageGatewayStatus(resp.status)) {
+        await resp.body?.cancel().catch(() => undefined)
+        throw new Error(imageGatewayError(resp.status))
+      }
+      throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    }
     const result = await resp.json() as any
     logTaskPayload(label, 'response payload', { id, provider: config.provider, result })
 
