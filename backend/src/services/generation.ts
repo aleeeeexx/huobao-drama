@@ -14,7 +14,7 @@ import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
-import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isRetryableImageGatewayStatus, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
+import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isOfficialXaiBase, isRetryableImageGatewayStatus, officialXaiEditsTarget, promptAfterEditsFallback, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
 
 type TaskType = 'image' | 'video'
 
@@ -248,18 +248,13 @@ async function processTask(id: number, config: AIConfig) {
     })
 
     let url: string, method: string, headers: Record<string, string>, body: unknown
+    let usedOfficialXaiEdits = false
 
     if (type === 'image') {
-      const adapter = getImageAdapter(config.provider)
-      const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
-      ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
-        id: record.id,
-        model: record.model,
-        prompt: record.prompt,
-        size: params.size,
-        frameType: params.frameType,
-        referenceImages: resolvedReferenceImages.length ? JSON.stringify(resolvedReferenceImages) : null,
-      }))
+      const built = await buildImageProviderRequest(record, config, params, record.prompt)
+      usedOfficialXaiEdits = built.usedOfficialXaiEdits
+      if (usedOfficialXaiEdits) logTaskProgress(label, 'grok-edits-host', { id, host: 'api.x.ai' })
+      ;({ url, method, headers, body } = built)
     } else {
       const adapter = getVideoAdapter(config.provider)
       const resolvedImageUrl = await normalizeVideoReferenceUrl(params.imageUrl)
@@ -314,30 +309,28 @@ async function processTask(id: number, config: AIConfig) {
         await resp.body?.cancel().catch(() => undefined)
         logTaskWarn(label, 'gateway-retry', { id, status: resp.status, attempt })
         await new Promise(resolve => setTimeout(resolve, IMAGE_GATEWAY_RETRY_MS))
-        const adapter = getImageAdapter(config.provider)
-        const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
-        ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
-          id: record.id,
-          model: record.model,
-          prompt: record.prompt,
-          size: params.size,
-          frameType: params.frameType,
-          referenceImages: resolvedReferenceImages.length ? JSON.stringify(resolvedReferenceImages) : null,
-        }))
+        const built = await buildImageProviderRequest(record, config, params, record.prompt)
+        usedOfficialXaiEdits = usedOfficialXaiEdits || built.usedOfficialXaiEdits
+        ;({ url, method, headers, body } = built)
         resp = await postProvider(url, method, headers, body)
         if (!isRetryableImageGatewayStatus(resp.status)) break
       }
     }
 
     const hadReferences = Array.isArray(params.referenceImages) && params.referenceImages.length > 0
-    if (type === 'image' && shouldFallbackFromImageEdits(resp.status, params.frameType, hadReferences)) {
+    if (type === 'image' && shouldFallbackFromImageEdits(resp.status, params.frameType, hadReferences, usedOfficialXaiEdits)) {
       await resp.body?.cancel().catch(() => undefined)
-      logTaskWarn(label, 'edits-fallback', { id, status: resp.status, message: EDITS_FALLBACK_MESSAGE })
+      logTaskWarn(label, 'edits-fallback', {
+        id,
+        status: resp.status,
+        message: EDITS_FALLBACK_MESSAGE,
+        editsHost: safeHost(url),
+      })
       const adapter = getImageAdapter(config.provider)
       ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
         id: record.id,
         model: record.model,
-        prompt: record.prompt,
+        prompt: promptAfterEditsFallback(record.prompt),
         size: params.size,
         frameType: params.frameType,
         referenceImages: null,
@@ -670,6 +663,56 @@ const publishedGrokReferences = new Map<string, string>()
 
 function isGrokImageModel(model: string | null | undefined) {
   return /grok|imagine/i.test(model || '')
+}
+
+function safeHost(rawUrl: string) {
+  try {
+    return new URL(rawUrl).hostname
+  } catch {
+    return ''
+  }
+}
+
+async function findOfficialXaiImageConfig(): Promise<{ baseUrl: string; apiKey: string } | null> {
+  const rows = await db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, 'image'))
+  const match = rows.find(row => row.isActive && row.apiKey.trim() && isOfficialXaiBase(row.baseUrl))
+  return match ? { baseUrl: match.baseUrl, apiKey: match.apiKey } : null
+}
+
+async function grokEditsConfig(config: AIConfig, model: string | null | undefined): Promise<AIConfig | null> {
+  if (!isGrokImageModel(model)) return null
+  const target = officialXaiEditsTarget({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    explicitApiKey: process.env.XAI_API_KEY,
+    explicitBaseUrl: process.env.XAI_BASE_URL,
+    storedOfficial: await findOfficialXaiImageConfig(),
+  })
+  if (!target) return null
+  return { ...config, baseUrl: target.baseUrl, apiKey: target.apiKey }
+}
+
+async function buildImageProviderRequest(
+  record: SysTaskRecord,
+  config: AIConfig,
+  params: Record<string, any>,
+  prompt: string | null | undefined,
+) {
+  const adapter = getImageAdapter(config.provider)
+  const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
+  const editsConfig = resolvedReferenceImages.length
+    ? await grokEditsConfig(config, record.model || config.model)
+    : null
+  const request = adapter.buildGenerateRequest(editsConfig ?? config, {
+    id: record.id,
+    model: record.model,
+    prompt,
+    size: params.size,
+    frameType: params.frameType,
+    referenceImages: resolvedReferenceImages.length ? JSON.stringify(resolvedReferenceImages) : null,
+  })
+  return { ...request, usedOfficialXaiEdits: !!editsConfig }
 }
 
 function localStaticPath(value: string): string | null {

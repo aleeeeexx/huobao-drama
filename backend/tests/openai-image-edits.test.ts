@@ -4,6 +4,8 @@ import assert from 'node:assert/strict'
 import { OpenAIImageAdapter } from '../src/services/adapters/openai-image.ts'
 import {
   EDITS_FALLBACK_MESSAGE,
+  officialXaiEditsTarget,
+  promptAfterEditsFallback,
   selectGrokReferenceUrl,
   shouldFallbackFromImageEdits,
 } from '../src/services/image-gateway.ts'
@@ -140,10 +142,50 @@ test('grok edits prefer the provider https url over a data url', () => {
   }), null)
 })
 
+test('grok edits call api.x.ai only when an xAI credential already exists', () => {
+  assert.equal(officialXaiEditsTarget({
+    baseUrl: 'https://codecc.cc',
+    apiKey: 'sk-gateway',
+  }), null)
+  assert.deepEqual(officialXaiEditsTarget({
+    baseUrl: 'https://codecc.cc',
+    apiKey: 'xai-stored',
+  }), { baseUrl: 'https://api.x.ai', apiKey: 'xai-stored' })
+  assert.deepEqual(officialXaiEditsTarget({
+    baseUrl: 'https://codecc.cc',
+    apiKey: 'sk-gateway',
+    explicitApiKey: 'xai-env',
+  }), { baseUrl: 'https://api.x.ai', apiKey: 'xai-env' })
+  assert.deepEqual(officialXaiEditsTarget({
+    baseUrl: 'https://codecc.cc',
+    apiKey: 'sk-gateway',
+    storedOfficial: { baseUrl: 'https://api.x.ai', apiKey: 'xai-db' },
+  }), { baseUrl: 'https://api.x.ai', apiKey: 'xai-db' })
+  assert.equal(officialXaiEditsTarget({
+    baseUrl: 'https://api.x.ai',
+    apiKey: 'xai-already',
+  }), null)
+  assert.equal(officialXaiEditsTarget({
+    baseUrl: 'https://codecc.cc',
+    apiKey: 'sk-gateway',
+    explicitApiKey: 'xai-env',
+    explicitBaseUrl: 'https://evil.example',
+  }), null)
+})
+
+test('edits fallback keeps the written appearance when reference images are dropped', () => {
+  const prompt = promptAfterEditsFallback('画面中的人物：你（青衫、短发）')
+  assert.match(prompt, /青衫、短发/)
+  assert.match(prompt, /必须严格按上文已经写明的外貌/)
+  assert.equal(promptAfterEditsFallback(prompt), prompt)
+})
+
 test('play stills fall back to generations only after edits gateway failure', () => {
   assert.equal(shouldFallbackFromImageEdits(502, 'play_still', true), true)
   assert.equal(shouldFallbackFromImageEdits(503, 'play_still', true), true)
   assert.equal(shouldFallbackFromImageEdits(400, 'play_still', true), false)
+  assert.equal(shouldFallbackFromImageEdits(401, 'play_still', true), false)
+  assert.equal(shouldFallbackFromImageEdits(401, 'play_still', true, true), true)
   assert.equal(shouldFallbackFromImageEdits(502, 'asset_reference', true), false)
   assert.equal(shouldFallbackFromImageEdits(502, 'play_still', false), false)
   assert.match(EDITS_FALLBACK_MESSAGE, /不含参考图/)
@@ -158,6 +200,8 @@ test('play stills fall back to generations only after edits gateway failure', ()
   assert.match(submit, /edits-fallback/)
   assert.match(generation, /normalizeGrokReferenceUrls/)
   assert.match(generation, /selectGrokReferenceUrl/)
+  assert.match(generation, /officialXaiEditsTarget/)
+  assert.match(submit, /promptAfterEditsFallback\(record\.prompt\)/)
   assert.doesNotMatch(generation.slice(
     generation.indexOf('async function normalizeGrokReferenceUrls'),
     generation.indexOf('async function normalizeReferenceImages'),
