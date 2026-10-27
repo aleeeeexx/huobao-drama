@@ -128,6 +128,29 @@ Four built-in Mastra agents with database-backed configuration and Skill extensi
 | `storyboard_breaker` |剧本 → 分镜序列拆解<br>Script → storyboard sequence breakdown|
 | `prompt_generator` |角色/场景/道具图片提示词 + 分镜视频提示词生成<br>Image prompts for characters/scenes/props + storyboard video prompts|
 
+### 🎮 织界 / Playable RPG
+
+玩家首页是互动文字 RPG：选世界或自建世界，流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以生成插画和影像。<br>
+The player home is an interactive text RPG: pick or write a world, read the next scene as it streams, and continue either by **clicking a plot branch or typing a free-text action**. The current scene can become an illustration and a short video.
+
+短剧制作台仍在 `/studio`。剧本改写、资产提取、分镜、提示词四个 Agent，以及图片/视频任务管线都保留；每一幕会写入背后的剧集，并异步交给 `script_rewriter`。<br>
+The short-drama studio remains at `/studio`. The four agents and the image/video task pipeline stay in place. Each scene is written into the backing episode and handed to `script_rewriter`.
+
+```bash
+cd backend && cp .env.example .env   # 填写 CODECC_API_KEY，不要提交
+cd backend && npm install && npm run dev
+cd frontend && npm install && npm run dev
+# 玩家 http://localhost:3013    制作台 http://localhost:3013/studio
+```
+
+|变量<br>Variable|默认值<br>Default|说明<br>Notes|
+|---|---|---|
+| `CODECC_API_KEY` | 空 / empty | 有值时启动写入 codecc 文本、图片、视频配置。只放 `backend/.env`<br>When set, startup upserts codecc text, image, and video configs. `backend/.env` only |
+| `CODECC_BASE_URL` | `https://codecc.cc` | 根地址，程序自行加 `/v1`<br>Root URL; the server appends `/v1` |
+| `CODECC_TEXT_MODEL` | `grok-4.7` | 叙事 / narration |
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 插画 / illustration |
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 影像 / scene video |
+
 ### 🌐 多语言界面 / Multi-Language UI
 
 界面内置 **中文 / English / 日本語 / 한국어** 四种语言，并可全局设置 AI 生成内容的语言。<br>
@@ -139,7 +162,7 @@ The interface ships in **中文 / English / 日本語 / 한국어**, with a glob
 |---|---|
 |**文本**<br>**Text**|OpenAI(兼容接口)、Gemini<br>OpenAI (compatible APIs), Gemini|
 |**图片**<br>**Image**|OpenAI、Gemini、火山引擎<br>OpenAI, Gemini, Volcano Engine|
-|**视频**<br>**Video**|火山引擎 Seedance 2.0(标准 / Fast / Mini)、MiniMax H3、阿里云百炼 Wan 3.0 (Prime / 标准)<br>Volcano Engine Seedance 2.0 (Standard / Fast / Mini), MiniMax H3, Alibaba Bailian Wan 3.0 (Prime / Standard)|
+|**视频**<br>**Video**|火山引擎 Seedance 2.0(标准 / Fast / Mini)、MiniMax H3、阿里云百炼 Wan 3.0 (Prime / 标准)、OpenAI 兼容视频（codecc / Grok Imagine）<br>Volcano Engine Seedance 2.0 (Standard / Fast / Mini), MiniMax H3, Alibaba Bailian Wan 3.0 (Prime / Standard), OpenAI-compatible video (codecc / Grok Imagine)|
 
 ---
 
@@ -173,9 +196,14 @@ No config files — everything is set via environment variables (all have defaul
 | `FRONTEND_DIST` | `frontend/dist` |前端静态产物目录<br>Frontend static build directory|
 | `FFMPEG_BIN` / `FFPROBE_BIN` |npm 内置二进制<br>bundled npm binaries|自定义 ffmpeg/ffprobe 可执行文件路径<br>Custom ffmpeg/ffprobe executable paths|
 | `PUBLIC_BASE_URL` | — |Seedance 引用本地参考资源时所需的公网地址（服务器部署用）<br>Public URL Seedance needs to reference local assets (server deployments)|
+| `CODECC_API_KEY` | 空 / empty |织界玩家模式。见上文「织界」<br>Playable RPG mode. See “织界” above|
+| `CODECC_BASE_URL` | `https://codecc.cc` |codecc 根地址<br>codecc root URL|
+| `CODECC_TEXT_MODEL` | `grok-4.7` |叙事模型<br>Narration model|
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |场面插画<br>Scene illustration|
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |场面影像<br>Scene video|
 
-> **说明**：AI 服务的 API Key、Base URL 和模型参数全部在 Web 界面的「设置」页配置并入库，不在配置文件/环境变量中维护。<br>
-> **Note**: AI service API keys, base URLs, and model parameters are all configured in the web UI "Settings" page and stored in the database — never in config files or environment variables.
+> **说明**：制作台中的模型仍可在「设置」页维护。织界用 `backend/.env` 的 `CODECC_*` 在启动时写入配置，真实密钥不要进 git。<br>
+> **Note**: Studio models can still be edited on the Settings page. RPG mode writes `CODECC_*` from `backend/.env` at startup. Do not commit real keys.
 
 ### 📥 安装依赖 / Installation
 

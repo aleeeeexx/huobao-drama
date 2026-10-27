@@ -373,6 +373,14 @@ async function failTask(id: number, message: string, code?: string) {
 
 type SysTaskRecord = typeof schema.sysTask.$inferSelect
 
+async function resolveVideoDownload(record: SysTaskRecord, videoUrl: string) {
+  if (!record.configId) return { url: videoUrl }
+  const config = await getConfigById(record.configId)
+  const adapter = config ? getVideoAdapter(config.provider) : null
+  if (config && adapter?.resolveDownload) return adapter.resolveDownload(config, videoUrl)
+  return { url: videoUrl }
+}
+
 async function pollTask(record: SysTaskRecord, config: AIConfig, taskId: string) {
   const type = record.type as TaskType
   const label = taskLabel(type)
@@ -504,6 +512,8 @@ async function writeBackImageAssets(record: SysTaskRecord, localPath: string) {
 }
 
 async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, duration: number | null | undefined) {
+  const download = await resolveVideoDownload(record, videoUrl)
+  videoUrl = download.url
   // 先落库地址与实际时长；后续下载失败仍可恢复，且不重新提交生成。
   const params = { ...parseTaskParams(record.params), resultDuration: duration }
   await db.update(schema.sysTask).set({ resultUrl: videoUrl, params: JSON.stringify(params),
@@ -511,7 +521,7 @@ async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, dura
     .where(eq(schema.sysTask.id, record.id))
   try {
     const localPath = record.localPath && fs.existsSync(getAbsolutePath(record.localPath))
-      ? record.localPath : await downloadVideo(videoUrl, record.id)
+      ? record.localPath : await downloadVideo(videoUrl, record.id, { headers: download.headers })
     await db.update(schema.sysTask).set({ localPath, stage: 'saving', updatedAt: now() }).where(eq(schema.sysTask.id, record.id))
     await extractVideoPoster(localPath)
     // 完成状态与业务回写原子提交；恢复旧任务不能覆盖用户后来生成的视频。

@@ -294,6 +294,54 @@ export const sqliteSchemaStatements = [
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+
+  `CREATE TABLE IF NOT EXISTS rpg_worlds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    tagline TEXT,
+    premise TEXT NOT NULL,
+    genre TEXT,
+    style TEXT,
+    is_preset INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS rpg_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    world_id INTEGER NOT NULL,
+    drama_id INTEGER NOT NULL,
+    episode_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    world_state TEXT NOT NULL,
+    turn_count INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_rpg_sessions_world_id ON rpg_sessions (world_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_rpg_sessions_updated_at ON rpg_sessions (updated_at)`,
+
+  `CREATE TABLE IF NOT EXISTS rpg_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    turn_index INTEGER NOT NULL,
+    player_mode TEXT,
+    player_text TEXT,
+    choice_id TEXT,
+    narrative TEXT NOT NULL,
+    choices TEXT NOT NULL,
+    world_state TEXT NOT NULL,
+    scene_id INTEGER,
+    storyboard_id INTEGER,
+    image_task_id INTEGER,
+    video_task_id INTEGER,
+    image_url TEXT,
+    video_url TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_rpg_turns_session_id ON rpg_turns (session_id, turn_index)`,
 ]
 
 /**

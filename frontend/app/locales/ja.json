@@ -33,6 +33,8 @@
   },
   "layout": {
     "nav": {
+      "play": "織界",
+      "studio": "制作",
       "projects": "プロジェクト",
       "settings": "設定"
     },

@@ -23,6 +23,8 @@ import props from './routes/props.js'
 import settings from './routes/settings.js'
 import storage from './routes/storage.js'
 import serverUpdate from './routes/serverUpdate.js'
+import rpg from './routes/rpg.js'
+import { bootstrapCodeccConfigs } from './services/codecc-config.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { resumeInterruptedTasks } from './services/generation.js'
 import { DATA_ROOT } from './utils/paths.js'
@@ -67,6 +69,7 @@ api.route('/props', props)
 api.route('/storage', storage)
 api.route('/settings', settings)
 api.route('/server-update', serverUpdate)
+api.route('/rpg', rpg)
 
 app.route('/api/v1', api)
 
@@ -84,6 +87,7 @@ app.use('*', serveStatic({ root: distPath }))
 app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 
 const port = Number(process.env.PORT || 5679)
+await bootstrapCodeccConfigs()
 console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
 
 await resumeInterruptedTasks()
