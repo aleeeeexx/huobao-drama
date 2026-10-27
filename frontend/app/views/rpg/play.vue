@@ -23,7 +23,16 @@
       </div>
       <p v-if="latest?.image_error || latest?.video_error" class="media-error">{{ latest.image_error || latest.video_error }}</p>
       <figure v-if="latest?.image_url" class="still">
-        <img :src="latest.image_url" alt="这一幕的剧情图" />
+        <button
+          ref="stillOpenButton"
+          type="button"
+          class="still-open"
+          :aria-expanded="stillOpen"
+          aria-haspopup="dialog"
+          @click="openStill"
+        >
+          <img :src="latest.image_url" alt="这一幕的剧情图" />
+        </button>
       </figure>
       <video v-if="latest?.video_url" class="clip" controls :src="latest.video_url"></video>
 
@@ -109,6 +118,28 @@
         </label>
       </form>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="stillOpen && latest?.image_url"
+        class="overlay still-viewer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="这一幕的剧情图"
+        @click.self="closeStill"
+      >
+        <button
+          ref="stillCloseButton"
+          type="button"
+          class="btn btn-ghost btn-icon still-viewer-close"
+          aria-label="关闭"
+          @click="closeStill"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <img class="still-viewer-img" :src="latest.image_url" alt="这一幕的剧情图" />
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -129,6 +160,9 @@ const freeText = ref('')
 const pendingAction = ref('')
 const mediaBusy = ref('')
 const logEl = ref<HTMLElement | null>(null)
+const stillOpen = ref(false)
+const stillOpenButton = ref<HTMLButtonElement | null>(null)
+const stillCloseButton = ref<HTMLButtonElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 useHead(() => ({ title: session.value?.title ? `${session.value.title} · 织界` : '织界' }))
@@ -272,6 +306,37 @@ function sendFree() {
   return act({ mode: 'free', text })
 }
 
+function openStill() {
+  if (!latest.value?.image_url) return
+  stillOpen.value = true
+}
+
+function closeStill() {
+  if (!stillOpen.value) return
+  stillOpen.value = false
+  nextTick(() => stillOpenButton.value?.focus())
+}
+
+function onStillViewerKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  closeStill()
+}
+
+watch(stillOpen, async (open) => {
+  if (!open) {
+    window.removeEventListener('keydown', onStillViewerKeydown)
+    return
+  }
+  window.addEventListener('keydown', onStillViewerKeydown)
+  await nextTick()
+  stillCloseButton.value?.focus()
+})
+
+watch(sessionId, () => {
+  stillOpen.value = false
+})
+
 async function illustrate() {
   mediaBusy.value = 'image'
   try {
@@ -314,7 +379,10 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(stopPoll)
+onBeforeUnmount(() => {
+  stopPoll()
+  window.removeEventListener('keydown', onStillViewerKeydown)
+})
 </script>
 
 <style scoped>
@@ -374,6 +442,63 @@ onBeforeUnmount(stopPoll)
 .still, .clip { width: 100%; border-radius: 14px; background: #111; }
 .still img, .clip { display: block; width: 100%; max-height: 180px; object-fit: cover; }
 .still img { border-radius: 14px; }
+.still-open {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 14px;
+  color: inherit;
+  font: inherit;
+  line-height: 0;
+  cursor: zoom-in;
+  appearance: none;
+}
+.still-open:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--button-focus);
+}
+.overlay.still-viewer {
+  --still-viewer-pad-x: 28px;
+  --still-viewer-pad-top: 64px;
+  --still-viewer-pad-bottom: 28px;
+  z-index: 120;
+  padding: var(--still-viewer-pad-top) var(--still-viewer-pad-x) var(--still-viewer-pad-bottom);
+  overflow: visible;
+}
+.still-viewer-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 1;
+  background: var(--surface-raised);
+  color: var(--text-0);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-lg);
+}
+.still-viewer-close:hover {
+  background: var(--surface-raised);
+  color: var(--text-0);
+}
+.still-viewer-img {
+  display: block;
+  flex: 0 1 auto;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: calc(100vw - (var(--still-viewer-pad-x) * 2));
+  max-height: calc(100vh - var(--still-viewer-pad-top) - var(--still-viewer-pad-bottom));
+  max-height: calc(100dvh - var(--still-viewer-pad-top) - var(--still-viewer-pad-bottom));
+  object-fit: contain;
+  object-position: center;
+  border-radius: 14px;
+  background: #111;
+  box-shadow: var(--shadow-xl);
+}
 .waiting { color: var(--text-3); }
 .turn { max-width: 720px; }
 .player-line { color: var(--accent-text); font-size: 13px; margin-bottom: 8px; }
