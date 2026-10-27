@@ -106,7 +106,6 @@ async function enterCustom() {
       title: custom.title,
       genre: custom.genre || '原创',
       premise: custom.premise,
-      style: '3d',
     })
     await navigateTo(`/play/${session.id}`)
   } catch (error) {

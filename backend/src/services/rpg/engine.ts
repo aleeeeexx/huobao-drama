@@ -9,6 +9,7 @@ import { buildAgentRequestContext } from '../../agents/context.js'
 import { mastra } from '../../mastra/index.js'
 import { getTextConfig, getTextProviderBaseUrl } from '../ai.js'
 import { generateImage, generateVideo } from '../generation.js'
+import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
 import { now } from '../../utils/response.js'
 import { PRESET_WORLDS, type WorldSeed } from './worlds.js'
 import {
@@ -46,7 +47,12 @@ export async function ensurePresetWorlds() {
   const ts = now()
   for (const world of PRESET_WORLDS) {
     const [existing] = await db.select().from(schema.rpgWorlds).where(eq(schema.rpgWorlds.slug, world.slug))
-    if (existing) continue
+    if (existing) {
+      if (existing.isPreset && existing.style !== world.style) {
+        await db.update(schema.rpgWorlds).set({ style: world.style, updatedAt: ts }).where(eq(schema.rpgWorlds.id, existing.id))
+      }
+      continue
+    }
     await db.insert(schema.rpgWorlds).values({
       slug: world.slug,
       title: world.title,
@@ -84,7 +90,6 @@ export async function createSession(input: {
   title?: string
   premise?: string
   genre?: string
-  style?: string
   tagline?: string
 }) {
   await ensurePresetWorlds()
@@ -97,7 +102,7 @@ export async function createSession(input: {
     title: world.title,
     description: world.premise,
     genre: world.genre,
-    style: world.style || '3d',
+    style: LIVE_ACTION_CINEMATIC_STYLE.value,
     aspectRatio: '16:9',
     status: 'active',
     metadata: JSON.stringify({ source: 'rpg' }),
@@ -200,8 +205,7 @@ export async function illustrateSession(sessionId: number) {
     }
   }
   const sceneId = await ensureScene(loaded, turn)
-  const styleHint = await styleHintFor(loaded.world.style)
-  const prompt = buildSceneImagePrompt(parseJson<RpgWorldState>(turn.worldState, loaded.state), styleHint)
+  const prompt = buildSceneImagePrompt(parseJson<RpgWorldState>(turn.worldState, loaded.state))
   const taskId = await generateImage({
     dramaId: loaded.session.dramaId,
     sceneId,
@@ -478,12 +482,6 @@ async function readTask(id: number) {
   return task || null
 }
 
-async function styleHintFor(style: string | null | undefined) {
-  if (!style) return ''
-  const [preset] = await db.select().from(schema.stylePresets).where(eq(schema.stylePresets.value, style))
-  return preset?.prompt || ''
-}
-
 interface PlayContext {
   session: typeof schema.rpgSessions.$inferSelect
   world: typeof schema.rpgWorlds.$inferSelect
@@ -615,7 +613,7 @@ async function mustWorld(id: number) {
   return world
 }
 
-async function createCustomWorld(input: { title?: string; premise?: string; genre?: string; style?: string; tagline?: string }) {
+async function createCustomWorld(input: { title?: string; premise?: string; genre?: string; tagline?: string }) {
   const title = String(input.title || '').trim()
   const premise = String(input.premise || '').trim()
   if (!title) throw new Error('给这个世界起个名字')
@@ -628,7 +626,7 @@ async function createCustomWorld(input: { title?: string; premise?: string; genr
     tagline: String(input.tagline || '').trim().slice(0, 40),
     premise,
     genre: String(input.genre || '原创').trim().slice(0, 20) || '原创',
-    style: String(input.style || '3d').trim() || '3d',
+    style: LIVE_ACTION_CINEMATIC_STYLE.value,
   }
   const res = await db.insert(schema.rpgWorlds).values({
     ...seed,
