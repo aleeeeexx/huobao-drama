@@ -244,6 +244,42 @@ test('scene choices survive a split stream, a recited sentinel, and a glued scri
   assert.deepEqual(choicesFromPayload(absorbedDone.stateRaw).map(choice => choice.label), labels)
 })
 
+test('continued turn narrative drops a paragraph the stream repeated back to back', () => {
+  const earlier = '雨还没停，茶已经凉了。'
+  const paragraph = '她的掌心还盖着杯口，热气从指缝里漏出来，灯花矮了一下，又矮回去。'
+  const later = '你没有先把手抽回来。'
+  const saved = `${earlier}\n\n${paragraph}\n\n${later}`
+  const choicesJson = '{"choices":[{"id":"c1","label":"揭开杯盖","detail":"看杯底的残字"},{"id":"c2","label":"按住她的手","detail":"先别掀开"},{"id":"c3","label":"问那一下灯花","detail":"矮回去是什么"}]}'
+  assert.equal(visibleNarrative(`${earlier}\n\n${paragraph}\n\n${paragraph}\n\n${later}`), saved)
+  assert.equal(visibleNarrative(`${paragraph}我先把这一幕写入剧本。${paragraph}`), paragraph)
+  assert.equal(visibleNarrative(`${paragraph}${paragraph}`), paragraph)
+  assert.equal(visibleNarrative('不。\n\n不。'), '不。\n\n不。')
+  assert.equal(visibleNarrative('你看了看他。你看了看他。'), '你看了看他。你看了看他。')
+  const different = '她的掌心还盖着杯口，你却先把杯子转开了。'
+  assert.equal(visibleNarrative(`${paragraph}\n\n${different}`), `${paragraph}\n\n${different}`)
+
+  const overlapped = new NarrativeStreamParser()
+  let live = ''
+  live += overlapped.push(`${earlier}\n\n${paragraph}\n\n`)
+  live += overlapped.push(`${paragraph}\n\n${later}`)
+  live += overlapped.push(`\n${RPG_STATE_SENTINEL}\n${choicesJson}`)
+  const finished = overlapped.finish()
+  live += finished.tail
+  assert.equal(finished.narrative, saved)
+  assert.equal(live.replace(/\s+/g, ''), saved.replace(/\s+/g, ''))
+  assert.equal(choicesFromPayload(finished.stateRaw)[0].label, '揭开杯盖')
+  assert.equal(choicesFromPayload(finished.stateRaw)[2].label, '问那一下灯花')
+
+  const restated = new NarrativeStreamParser()
+  const twice = `${earlier}\n\n${paragraph}\n\n${paragraph}\n\n${later}`
+  for (const char of twice) restated.push(char)
+  restated.absorbFinalText(`${twice}\n${RPG_STATE_SENTINEL}\n${choicesJson}`)
+  const restatedDone = restated.finish()
+  assert.equal(restatedDone.narrative, saved)
+  assert.equal(choicesFromPayload(restatedDone.stateRaw)[0].label, '揭开杯盖')
+  assert.equal(visibleNarrative(visibleNarrative(restatedDone.narrative)), saved)
+})
+
 test('screenplay scene can be read back as the player narrative', () => {
   const state = emptyWorldState()
   state.scene = { location: '雾隐茶寮', time: '子时', summary: '灯笼在雨里摇', atmosphere: '冷青' }

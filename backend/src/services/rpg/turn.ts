@@ -125,7 +125,10 @@ export class NarrativeStreamParser {
       this.stateRaw += chunk
       return ''
     }
-    this.pending += chunk
+    // 后一步常把这一幕刚写完的同一段再贴上来。先裁掉这段重叠，避免再推进 rawNarrative。
+    const freshChunk = trimRepeatedProsePrefix(this.rawNarrative + this.pending, chunk)
+    if (!freshChunk) return ''
+    this.pending += freshChunk
     const fresh = this.releaseNarrative()
     if (!fresh) return ''
     this.rawNarrative += fresh
@@ -515,8 +518,100 @@ export function stripChoiceTail(script: string): string {
   return cut ? text.trim() : script
 }
 
+/**
+ * 连续重复到这个长度、并且含句末标点，才当成同一段被多步流再贴了一次。
+ * 短句强调（「不。不。」）不到这个长度，原样保留。
+ */
+const REPEATED_PROSE_MIN = 12
+
 export function visibleNarrative(text: string): string {
-  return stripPipelineMeta(text).trim()
+  return collapseAdjacentRepeatedProse(stripPipelineMeta(text).trim())
+}
+
+interface ProseAtom {
+  char: string
+  index: number
+}
+
+function proseAtoms(text: string): ProseAtom[] {
+  const atoms: ProseAtom[] = []
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (/\s/u.test(char)) continue
+    atoms.push({ char, index })
+  }
+  return atoms
+}
+
+function sameAtoms(
+  left: ProseAtom[],
+  leftOffset: number,
+  right: ProseAtom[],
+  rightOffset: number,
+  length: number,
+): boolean {
+  for (let offset = 0; offset < length; offset++) {
+    if (left[leftOffset + offset]?.char !== right[rightOffset + offset]?.char) return false
+  }
+  return true
+}
+
+function repeatedUnitHasSentenceEnd(atoms: ProseAtom[], start: number, length: number): boolean {
+  for (let offset = start; offset < start + length; offset++) {
+    if (/[。！？!?]/.test(atoms[offset]?.char || '')) return true
+  }
+  return false
+}
+
+/** 新片段若以前文结尾那一段开头，只留下还没写过的后半。整段重贴则什么都不留。 */
+function trimRepeatedProsePrefix(existing: string, chunk: string): string {
+  const existingAtoms = proseAtoms(existing)
+  const chunkAtoms = proseAtoms(chunk)
+  const max = Math.min(existingAtoms.length, chunkAtoms.length)
+  if (max < REPEATED_PROSE_MIN) return chunk
+  for (let size = max; size >= REPEATED_PROSE_MIN; size--) {
+    if (!sameAtoms(existingAtoms, existingAtoms.length - size, chunkAtoms, 0, size)) continue
+    if (!repeatedUnitHasSentenceEnd(chunkAtoms, 0, size)) continue
+    if (size >= chunkAtoms.length) return ''
+    const rest = chunk.slice(chunkAtoms[size - 1].index + 1)
+    return rest.trim() ? rest : ''
+  }
+  return chunk
+}
+
+/**
+ * 多步 textStream 会把工具前后的正文接在一起。模型在保存剧本之后常把刚写完的
+ * 同一段再输出一遍，增量拼接不会发现这种后缀重叠。玩家看到的叙事只留一份。
+ */
+function collapseAdjacentRepeatedProse(text: string): string {
+  let current = text
+  for (let pass = 0; pass < 6; pass++) {
+    const next = collapseAdjacentRepeatedProseOnce(current)
+    if (!next || next.length >= current.length) break
+    current = next
+  }
+  return current.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function collapseAdjacentRepeatedProseOnce(text: string): string | null {
+  const atoms = proseAtoms(text)
+  const count = atoms.length
+  let bestStart = -1
+  let bestLength = 0
+  for (let start = 0; start + REPEATED_PROSE_MIN * 2 <= count; start++) {
+    const maxLength = Math.floor((count - start) / 2)
+    for (let length = maxLength; length >= REPEATED_PROSE_MIN && length > bestLength; length--) {
+      if (!sameAtoms(atoms, start, atoms, start + length, length)) continue
+      if (!repeatedUnitHasSentenceEnd(atoms, start, length)) continue
+      bestStart = start
+      bestLength = length
+      break
+    }
+  }
+  if (bestLength === 0) return null
+  const firstEnd = atoms[bestStart + bestLength - 1].index
+  const secondEnd = atoms[bestStart + bestLength * 2 - 1].index
+  return text.slice(0, firstEnd + 1) + text.slice(secondEnd + 1)
 }
 
 /** 模型若把场景头写进回复，回退补剧本时沿用这个地点，而不是上一幕的地点。 */
