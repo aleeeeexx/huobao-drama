@@ -126,29 +126,27 @@ export class NarrativeStreamParser {
       return ''
     }
     this.pending += chunk
-    const fresh = this.pullFreshNarrative()
+    const fresh = this.releaseNarrative()
     if (!fresh) return ''
     this.rawNarrative += fresh
     this.held += fresh
     return this.flushHeld(false)
   }
 
+  /**
+   * textStream 有时到不了最终那一步的选项，完整 `.text` 里还有。
+   * 只补选项块，不把已经播过的正文再推一遍。
+   */
+  absorbFinalText(text: string) {
+    if (!text || lastTrailingPlayChoices(this.seenText())) return
+    const slice = trailingChoiceSlice(text)
+    if (!slice) return
+    if (this.inState) this.stateRaw += `\n${slice}`
+    else this.pending += `\n${slice}`
+  }
+
   finish(): { narrative: string; rawNarrative: string; stateRaw: string; tail: string } {
-    if (!this.inState) {
-      const combined = this.rawNarrative + this.pending
-      const marker = trailingStateIndex(combined)
-      if (marker !== -1) {
-        const narrativeRaw = combined.slice(0, marker)
-        const consumed = this.rawNarrative.length - this.held.length
-        this.rawNarrative = narrativeRaw
-        this.held = narrativeRaw.slice(Math.min(Math.max(consumed, 0), narrativeRaw.length))
-        this.stateRaw = combined.slice(marker).trim()
-      } else {
-        this.held += this.pending
-        this.rawNarrative = combined
-      }
-      this.pending = ''
-    }
+    this.detachPayload()
     const tail = this.flushHeld(true)
     const narrative = visibleNarrative(this.rawNarrative)
     this.narrative = narrative
@@ -160,20 +158,63 @@ export class NarrativeStreamParser {
     }
   }
 
-  private pullFreshNarrative(): string {
-    const marker = this.pending.indexOf(RPG_STATE_SENTINEL)
-    if (marker === -1) {
-      const hold = RPG_STATE_SENTINEL.length - 1
-      if (this.pending.length <= hold) return ''
-      const visible = this.pending.slice(0, this.pending.length - hold)
-      this.pending = this.pending.slice(this.pending.length - hold)
+  private seenText(): string {
+    return this.inState ? `${this.rawNarrative}\n${this.stateRaw}` : `${this.rawNarrative}${this.pending}`
+  }
+
+  /**
+   * 说明文字里复述的分隔符后面接的是逗号或句子，不是选项。
+   * 那种分隔符不能把后面的正文吞进状态区，否则玩家看得到故事、选项却解析失败。
+   */
+  private releaseNarrative(): string {
+    const confirmed = confirmedPayloadIndex(this.pending)
+    if (confirmed !== -1) {
+      const visible = this.pending.slice(0, confirmed)
+      this.stateRaw = this.pending.slice(confirmed)
+      this.pending = ''
+      this.inState = true
       return visible
     }
-    const visible = this.pending.slice(0, marker)
-    this.stateRaw = this.pending.slice(marker + RPG_STATE_SENTINEL.length)
-    this.pending = ''
-    this.inState = true
+    const hold = uncertainSuffixLength(this.pending)
+    if (this.pending.length <= hold) return ''
+    const visible = this.pending.slice(0, this.pending.length - hold)
+    this.pending = this.pending.slice(this.pending.length - hold)
     return visible
+  }
+
+  /** 选项可能在分隔符之后，也可能直接粘在正文或剧本末尾。收尾时再切一次。 */
+  private detachPayload() {
+    const streamed = this.rawNarrative.length - this.held.length
+    const streamedRawLength = this.rawNarrative.length
+    if (!this.inState) {
+      this.rawNarrative += this.pending
+      this.held += this.pending
+      this.pending = ''
+    }
+    const full = this.stateRaw ? `${this.rawNarrative}${this.stateRaw}` : this.rawNarrative
+    const span = lastTailSpan(full)
+    if (!span) {
+      if (this.inState) {
+        this.rawNarrative += this.stateRaw
+        this.held += this.stateRaw
+        this.stateRaw = ''
+        this.inState = false
+      }
+      return
+    }
+    let start = span.start
+    const before = full.slice(0, start)
+    const sentinelAt = before.lastIndexOf(RPG_STATE_SENTINEL)
+    if (sentinelAt !== -1 && payloadGap(before.slice(sentinelAt + RPG_STATE_SENTINEL.length))) {
+      start = sentinelAt
+    }
+    const narrativeRaw = full.slice(0, start)
+    let held = streamed >= narrativeRaw.length ? '' : narrativeRaw.slice(Math.max(streamed, 0))
+    if (streamed >= streamedRawLength && !held.trim()) held = ''
+    this.rawNarrative = narrativeRaw
+    this.held = held
+    this.stateRaw = full.slice(span.start, span.end)
+    this.inState = true
   }
 
   /** 句子没收尾时先攒着，避免工序说明只到一半就被推给玩家。 */
@@ -186,6 +227,11 @@ export class NarrativeStreamParser {
       if (isPipelineMetaSentence(next.sentence)) continue
       if (!next.sentence.trim()) {
         if (!this.seenProse) continue
+        // 段末空白先留着。分隔符往往就接在换行后面，提前推给玩家会在正文下多出一行。
+        if (!next.rest.trim()) {
+          if (!final) this.held = next.sentence + next.rest
+          break
+        }
         emitted += next.sentence
         continue
       }
@@ -196,26 +242,106 @@ export class NarrativeStreamParser {
   }
 }
 
-/** 没有分隔符时，从含 choices / scene 的那一层 { 切开，而不是最内层括号。 */
-function trailingStateIndex(text: string): number {
-  let best = -1
-  for (const key of ['"choices"', '"scene"']) {
-    let from = 0
-    while (from < text.length) {
-      const keyAt = text.indexOf(key, from)
-      if (keyAt === -1) break
-      const brace = text.lastIndexOf('{', keyAt)
-      if (brace > 20 && (best === -1 || brace < best)) best = brace
-      from = keyAt + key.length
+const SENTINEL_HOLD = RPG_STATE_SENTINEL.length - 1
+const CHOICE_OBJECT_HOLD_MAX = 800
+
+/** 分隔符之后、选项真正开始之前，只允许空白或半截代码围栏。 */
+function payloadGap(text: string): boolean {
+  return /^\s*(?:```(?:json)?)?\s*$/i.test(text)
+}
+
+function classifyAfterSentinel(after: string): 'prefix' | 'payload' | 'mention' {
+  const trimmed = after.trim()
+  if (!trimmed) return 'prefix'
+  if (/^```(?:json|JSON)?$/i.test(trimmed)) return 'prefix'
+  if (/^```(?:json|JSON)?\s*[{\[]/i.test(trimmed)) return 'payload'
+  if (/^[{\[]/.test(trimmed)) return 'payload'
+  if (/^(?:[-*]|\d+[.、．])\s*$/.test(trimmed)) return 'prefix'
+  if (/^(?:[-*]|\d+[.、．])\s+\S/.test(trimmed)) return 'payload'
+  return 'mention'
+}
+
+function confirmedPayloadIndex(text: string): number {
+  let from = 0
+  while (from < text.length) {
+    const marker = text.indexOf(RPG_STATE_SENTINEL, from)
+    if (marker === -1) break
+    const after = text.slice(marker + RPG_STATE_SENTINEL.length)
+    const kind = classifyAfterSentinel(after)
+    if (kind === 'payload') return marker
+    if (kind === 'prefix') return -1
+    from = marker + RPG_STATE_SENTINEL.length
+  }
+  const braced = trailingChoiceObjectIndex(text)
+  return braced
+}
+
+function trailingChoiceObjectIndex(text: string): number {
+  const spans = locateChoiceSpans(text)
+  for (let index = spans.length - 1; index >= 0; index--) {
+    const span = spans[index]
+    if (text.length - span.start > CHOICE_OBJECT_HOLD_MAX) continue
+    if (trailingKind(text.slice(span.end)) === 'junk') return span.start
+  }
+  return -1
+}
+
+function uncertainSuffixLength(text: string): number {
+  let hold = SENTINEL_HOLD
+  const marker = text.lastIndexOf(RPG_STATE_SENTINEL)
+  if (marker !== -1) {
+    const after = text.slice(marker + RPG_STATE_SENTINEL.length)
+    if (classifyAfterSentinel(after) === 'prefix') hold = Math.max(hold, text.length - marker)
+  } else {
+    const tail = text.slice(-SENTINEL_HOLD)
+    for (let size = tail.length; size > 0; size--) {
+      if (RPG_STATE_SENTINEL.startsWith(tail.slice(-size))) {
+        hold = Math.max(hold, size)
+        break
+      }
     }
   }
-  return best
+  const spans = locateChoiceSpans(text)
+  for (let index = spans.length - 1; index >= 0; index--) {
+    const span = spans[index]
+    if (text.length - span.start > CHOICE_OBJECT_HOLD_MAX) continue
+    const kind = trailingKind(text.slice(span.end))
+    if (kind === 'empty' || kind === 'junk') hold = Math.max(hold, text.length - span.start)
+    break
+  }
+  const brace = text.lastIndexOf('{')
+  if (brace !== -1 && text.length - brace <= CHOICE_OBJECT_HOLD_MAX) {
+    const end = matchJsonEnd(text, brace)
+    const slice = end === -1 ? text.slice(brace) : text.slice(brace, end)
+    if (/"choices"|"options"|"label"|"选项"/.test(slice) && end === -1) {
+      hold = Math.max(hold, text.length - brace)
+    }
+  }
+  return hold
+}
+
+/** 选项块后面如果还是故事，就不是这一幕的尾部。工具参数和工序说明不算故事。 */
+function trailingKind(rest: string): 'empty' | 'junk' | 'prose' {
+  const trimmed = rest.trim()
+  if (!trimmed) return 'empty'
+  if (/^[。！？!?]/.test(trimmed)) return 'prose'
+  const compact = trimmed.replace(/\s+/g, '')
+  if (/^(?:我先|让我先|接下来我)/.test(compact) && /剧本|正文|本集|save_script|read_episode_script/.test(compact)) return 'junk'
+  if (compact.length <= 120 && /save_script|read_episode_script|写入剧本|保存剧本|保存完整剧本|落进剧本|补上正文|给玩家看的正文|给你看的正文/.test(compact)) {
+    return 'junk'
+  }
+  if (/^[{[]/.test(trimmed)) return 'junk'
+  return 'prose'
 }
 
 export function salvageTrailingState(text: string): { narrative: string; stateRaw: string } {
-  const marker = trailingStateIndex(text)
-  if (marker === -1) return { narrative: text.trim(), stateRaw: '' }
-  return { narrative: text.slice(0, marker).trim(), stateRaw: text.slice(marker).trim() }
+  const span = lastTailSpan(text)
+  if (!span) return { narrative: text.trim(), stateRaw: '' }
+  let start = span.start
+  const before = text.slice(0, start)
+  const sentinelAt = before.lastIndexOf(RPG_STATE_SENTINEL)
+  if (sentinelAt !== -1 && payloadGap(before.slice(sentinelAt + RPG_STATE_SENTINEL.length))) start = sentinelAt
+  return { narrative: text.slice(0, start).trim(), stateRaw: text.slice(span.start, span.end).trim() }
 }
 
 const SENTENCE_PATTERN = /[^。！？!?\n]*[。！？!?]+|[^。！？!?\n]+/g
@@ -246,6 +372,9 @@ export function isPipelineMetaSentence(sentence: string): boolean {
   if (/写入剧本/.test(text) && /(?:我|先把|补上|保存|读取|这一幕)/.test(text)) return true
   if (/剧本改写|不要绕过工具|不要写进回复|不要输出任何文字|从故事的第一句/.test(text)) return true
   if (/^(?:我先|让我先|接下来我)/.test(text) && /(?:剧本|正文|本集|续写第)/.test(text)) return true
+  if (text.includes(RPG_STATE_SENTINEL)) return true
+  if (/不超过18字/.test(text) && /choices|选项/.test(text)) return true
+  if (/[{[]/.test(text) && /"label"|"detail"|"choices"|"options"/.test(text)) return true
   return false
 }
 
@@ -275,7 +404,19 @@ export function stripPipelineMeta(text: string): string {
 
 /** 只读取剧情分支。角色、场景、物品以提取 Agent 写入的资产为准，不采用这段 JSON。 */
 export function choicesFromPayload(raw: string): RpgChoice[] {
-  return normalizeChoices(parseJsonObject(raw)?.choices)
+  return lastTrailingPlayChoices(raw) || fallbackChoices()
+}
+
+/**
+ * 按顺序采用第一处真正的选项。
+ * 流式正文、最终回复、以及粘在剧本末尾的选项块都可以，示例 JSON 和解析失败都不算。
+ */
+export function resolvePlayChoices(sources: string[]): RpgChoice[] {
+  for (const source of sources) {
+    const found = lastTrailingPlayChoices(source)
+    if (found) return found.map(choice => ({ ...choice }))
+  }
+  return fallbackChoices()
 }
 
 export interface ProjectedCharacter {
@@ -359,9 +500,19 @@ export function narrativeFromScreenplay(script: string, turnIndex: number): stri
 }
 
 export function stripChoiceTail(script: string): string {
-  const marker = script.indexOf(RPG_STATE_SENTINEL)
-  if (marker === -1) return script
-  return script.slice(0, marker).trim()
+  let text = script || ''
+  let cut = false
+  const marker = text.indexOf(RPG_STATE_SENTINEL)
+  if (marker !== -1) {
+    text = text.slice(0, marker)
+    cut = true
+  }
+  const span = lastTailSpan(text)
+  if (span && trailingKind(text.slice(span.end)) !== 'prose') {
+    text = text.slice(0, span.start)
+    cut = true
+  }
+  return cut ? text.trim() : script
 }
 
 export function visibleNarrative(text: string): string {
@@ -495,24 +646,208 @@ export function describeAction(action: ResolvedAction, choices: RpgChoice[]): st
   return `玩家写下了自己的行动：「${action.text}」`
 }
 
-function normalizeChoices(value: unknown): RpgChoice[] {
-  if (!Array.isArray(value)) return FALLBACK_CHOICES.map(choice => ({ ...choice }))
+const EXAMPLE_LABELS = new Set(['不超过18字', '第二条', '第三条'])
+const EXAMPLE_DETAILS = new Set(['不超过36字', '不同方向', '再一个方向', ''])
+
+interface ChoiceSpan {
+  start: number
+  end: number
+  choices: RpgChoice[] | null
+}
+
+function fallbackChoices(): RpgChoice[] {
+  return FALLBACK_CHOICES.map(choice => ({ ...choice }))
+}
+
+function isExampleChoices(choices: RpgChoice[]): boolean {
+  return choices.length >= 2 && choices.every(choice => EXAMPLE_LABELS.has(choice.label) && EXAMPLE_DETAILS.has(choice.detail))
+}
+
+function readChoiceArray(value: unknown): RpgChoice[] | null {
+  if (!Array.isArray(value)) return null
   const choices: RpgChoice[] = []
   for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const record = item as Record<string, unknown>
-    const label = clip(String(record.label || record.text || ''), 18)
-    if (!label) continue
-    const id = clip(String(record.id || `c${choices.length + 1}`), 16) || `c${choices.length + 1}`
-    choices.push({
-      id,
-      label,
-      detail: clip(String(record.detail || record.hint || ''), 36),
-    })
+    if (typeof item === 'string') {
+      const label = clip(item, 18)
+      if (!label) continue
+      choices.push({ id: `c${choices.length + 1}`, label, detail: '' })
+    } else if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>
+      const label = clip(String(record.label || record.text || record.title || ''), 18)
+      if (!label) continue
+      const id = clip(String(record.id || `c${choices.length + 1}`), 16) || `c${choices.length + 1}`
+      choices.push({
+        id,
+        label,
+        detail: clip(String(record.detail || record.hint || record.description || ''), 36),
+      })
+    }
     if (choices.length === 3) break
   }
-  if (choices.length < 2) return FALLBACK_CHOICES.map(choice => ({ ...choice }))
+  if (choices.length < 2 || isExampleChoices(choices)) return null
   return choices.map((choice, index) => ({ ...choice, id: choice.id || `c${index + 1}` }))
+}
+
+function choiceArrayValue(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed
+  if (!parsed || typeof parsed !== 'object') return null
+  const record = parsed as Record<string, unknown>
+  for (const key of ['choices', 'options', '选项']) {
+    if (Array.isArray(record[key])) return record[key] as unknown[]
+  }
+  return null
+}
+
+function hasChoiceShape(parsed: unknown): boolean {
+  return choiceArrayValue(parsed) !== null
+}
+
+function locateChoiceSpans(text: string): ChoiceSpan[] {
+  const spans: ChoiceSpan[] = []
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (char !== '{' && char !== '[') continue
+    const end = matchJsonEnd(text, index)
+    if (end === -1) continue
+    const parsed = lenientParse(text.slice(index, end))
+    if (!hasChoiceShape(parsed)) continue
+    spans.push({ start: index, end, choices: readChoiceArray(choiceArrayValue(parsed)) })
+    index = end - 1
+  }
+  let from = 0
+  while (from < text.length) {
+    const marker = text.indexOf(RPG_STATE_SENTINEL, from)
+    if (marker === -1) break
+    const listed = parseChoiceList(text.slice(marker + RPG_STATE_SENTINEL.length))
+    if (listed) {
+      const start = marker + RPG_STATE_SENTINEL.length + listed.offset
+      spans.push({ start, end: start + listed.length, choices: listed.choices })
+    }
+    from = marker + RPG_STATE_SENTINEL.length
+  }
+  const listedWhole = parseChoiceList(text)
+  if (listedWhole && listedWhole.offset + listedWhole.length >= text.trimEnd().length && listedWhole.choices) {
+    spans.push({
+      start: listedWhole.offset,
+      end: listedWhole.offset + listedWhole.length,
+      choices: listedWhole.choices,
+    })
+  }
+  return spans
+}
+
+function lastTailSpan(text: string): ChoiceSpan | null {
+  const spans = locateChoiceSpans(text)
+  let fallback: ChoiceSpan | null = null
+  for (let index = spans.length - 1; index >= 0; index--) {
+    if (trailingKind(text.slice(spans[index].end)) === 'prose') continue
+    if (!fallback) fallback = spans[index]
+    if (spans[index].choices) return spans[index]
+  }
+  return fallback
+}
+
+function lastTrailingPlayChoices(text: string): RpgChoice[] | null {
+  if (!text) return null
+  const spans = locateChoiceSpans(text)
+  for (let index = spans.length - 1; index >= 0; index--) {
+    if (!spans[index].choices) continue
+    if (trailingKind(text.slice(spans[index].end)) === 'prose') continue
+    return spans[index].choices
+  }
+  return null
+}
+
+function trailingChoiceSlice(text: string): string {
+  const span = lastTailSpan(text)
+  if (!span?.choices) return ''
+  return text.slice(span.start, span.end)
+}
+
+function parseChoiceList(text: string): { offset: number; length: number; choices: RpgChoice[] | null } | null {
+  const leading = text.match(/^\s*/)?.[0].length || 0
+  const body = text.slice(leading)
+  const choices: RpgChoice[] = []
+  let consumed = 0
+  const lines = body.split('\n')
+  for (let index = 0; index < lines.length && choices.length < 3; index++) {
+    const line = lines[index]
+    const item = line.match(/^\s*(?:[-*]|\d+[.、．])\s+(.+?)\s*$/)
+    if (!item) {
+      if (!line.trim() && choices.length === 0) {
+        consumed += line.length + 1
+        continue
+      }
+      break
+    }
+    const parts = item[1].split(/\s*[：:|｜/]\s*/)
+    const label = clip(parts[0] || '', 18)
+    if (!label) break
+    choices.push({
+      id: `c${choices.length + 1}`,
+      label,
+      detail: clip(parts.slice(1).join('：'), 36),
+    })
+    consumed += line.length + (index < lines.length - 1 ? 1 : 0)
+  }
+  if (choices.length < 2) return null
+  return {
+    offset: leading,
+    length: consumed,
+    choices: isExampleChoices(choices) ? null : choices,
+  }
+}
+
+function matchJsonEnd(text: string, start: number): number {
+  const open = text[start]
+  if (open !== '{' && open !== '[') return -1
+  let depth = 0
+  let quote: '"' | "'" | '' = ''
+  let escaped = false
+  for (let index = start; index < text.length; index++) {
+    const char = text[index]
+    if (quote) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"') {
+      quote = '"'
+      continue
+    }
+    if (char === "'") {
+      quote = "'"
+      continue
+    }
+    if (char === '{' || char === '[') depth++
+    else if (char === '}' || char === ']') {
+      depth--
+      if (depth === 0) return index + 1
+    }
+  }
+  return -1
+}
+
+function lenientParse(raw: string): unknown {
+  const relaxed = raw
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1')
+    .replace(/'([^'\\]*)'\s*:/g, '"$1":')
+    .replace(/:\s*'([^'\\]*)'/g, ': "$1"')
+  for (const attempt of [raw, relaxed]) {
+    try {
+      return JSON.parse(attempt)
+    } catch { /* 下一种写法 */ }
+  }
+  return null
 }
 
 function pickScene(scenes: ProjectedScene[], preferredSceneId?: number | null): ProjectedScene | null {
@@ -538,22 +873,6 @@ function projectProp(row: ProjectedProp): RpgItem {
     name: clip(row.name || '', 40),
     holder: clip(row.type || '', 40),
     description: clip(row.description || '', 200),
-  }
-}
-
-function parseJsonObject(raw: string): Record<string, unknown> | null {
-  const stripped = raw
-    .replace(/^\s*```(?:json)?/i, '')
-    .replace(/```\s*$/i, '')
-    .trim()
-  const start = stripped.indexOf('{')
-  const end = stripped.lastIndexOf('}')
-  if (start === -1 || end <= start) return null
-  try {
-    const parsed = JSON.parse(stripped.slice(start, end + 1))
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
-  } catch {
-    return null
   }
 }
 

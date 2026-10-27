@@ -19,7 +19,6 @@ import {
   assembleStillPrompt,
   buildPlayRewriteMessage,
   buildPlayStoryboardMessage,
-  choicesFromPayload,
   describeAction,
   emptyWorldState,
   formatScreenplayScene,
@@ -28,6 +27,7 @@ import {
   NarrativeStreamParser,
   projectWorldState,
   resolvePlayerAction,
+  resolvePlayChoices,
   sceneIdFromScreenplay,
   scriptHasScene,
   stripChoiceTail,
@@ -179,7 +179,7 @@ export async function narrateSession(
     const actionLine = describeAction(resolved.action, loaded.latestChoices)
     const episode = await readEpisode(loaded.session.episodeId)
     const parser = new NarrativeStreamParser()
-    await runStudioAgent({
+    const run = await runStudioAgent({
       agentType: 'script_rewriter',
       episodeId: loaded.session.episodeId,
       dramaId: loaded.session.dramaId,
@@ -198,8 +198,15 @@ export async function narrateSession(
         if (visible) await onDelta(visible)
       },
     })
+    parser.absorbFinalText(run.text || '')
     const finished = parser.finish()
     if (finished.tail) await onDelta(finished.tail)
+    const savedEpisode = await readEpisode(loaded.session.episodeId)
+    const choices = resolvePlayChoices([
+      finished.stateRaw,
+      finished.rawNarrative,
+      savedEpisode?.scriptContent || '',
+    ])
     await commitScreenplay(loaded, turnIndex, resolved.action, finished.rawNarrative)
     const scriptEpisode = await readEpisode(loaded.session.episodeId)
     const script = scriptEpisode?.scriptContent || ''
@@ -209,7 +216,6 @@ export async function narrateSession(
     const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
     const preferredSceneId = sceneIdFromScreenplay(script, turnIndex, assets.scenes)
     const projected = projectWorldState(loaded.state, assets, preferredSceneId)
-    const choices = choicesFromPayload(finished.stateRaw)
     const turn = await persistTurn(loaded, resolved.action, narrative, choices, projected.state, projected.sceneId)
     await appendManuscript(loaded.session.episodeId, turnIndex, resolved.action, narrative)
     return serializeTurn(turn)

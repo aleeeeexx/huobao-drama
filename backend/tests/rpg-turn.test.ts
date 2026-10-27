@@ -13,6 +13,7 @@ import {
   narrativeFromScreenplay,
   projectWorldState,
   resolvePlayerAction,
+  resolvePlayChoices,
   stripChoiceTail,
   stripPipelineMeta,
   visibleNarrative,
@@ -148,6 +149,99 @@ test('player narrative strips agent pipeline preambles and keeps the story', () 
   assert.equal(looseFinished.narrative, looseStory)
   assert.equal(choicesFromPayload(looseFinished.stateRaw)[0].label, '推门')
   assert.equal(choicesFromPayload(looseFinished.stateRaw)[1].label, '看信')
+})
+
+test('scene choices survive a split stream, a recited sentinel, and a glued script tail', () => {
+  const story = '你翻开杯底那半张纸，墨迹在灯下对上了。椅背上还搭着一件风衣，窗外有人影贴着玻璃。'
+  const example = [
+    '我先读取本集已有正文，再按格式输出一次 ',
+    RPG_STATE_SENTINEL,
+    '，然后附上 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。',
+  ].join('')
+  const real = [
+    '{"choices":[',
+    '{"id":"c1","label":"翻开杯底那半张纸","detail":"对残字"},',
+    '{"id":"c2","label":"低声问残字含义","detail":"问掌柜这半张纸"},',
+    '{"id":"c3","label":"去看椅背上的风衣","detail":"先别碰袖口"}',
+    ']}',
+  ].join('\n')
+  const trailing = '\n我先把这一幕写入剧本。save_script {"content":"## S4 | 内景 · 茶寮 | 夜"}'
+  const full = `${example}\n\n${story}\n${RPG_STATE_SENTINEL}\n${real}${trailing}`
+  const labels = ['翻开杯底那半张纸', '低声问残字含义', '去看椅背上的风衣']
+
+  for (const size of [1, 7, full.length]) {
+    const parser = new NarrativeStreamParser()
+    let live = ''
+    for (let index = 0; index < full.length; index += size) {
+      live += parser.push(full.slice(index, index + size))
+    }
+    const finished = parser.finish()
+    live += finished.tail
+    assert.equal(live, story, `chunk ${size}`)
+    assert.equal(finished.narrative, story, `chunk ${size}`)
+    assert.doesNotMatch(live, /读取本集|写入剧本|不超过18字|save_script|"choices"/)
+    const choices = choicesFromPayload(finished.stateRaw)
+    assert.deepEqual(choices.map(choice => choice.label), labels, `chunk ${size}`)
+    assert.equal(choices[1].detail, '问掌柜这半张纸')
+  }
+
+  const messy = [
+    '```json',
+    '{"choices":[{"id":"c1","label":"翻开杯底那半张纸","detail":"对残字"},{"id":"c2","label":"低声问残字含义","detail":"问掌柜"},{"id":"c3","label":"侧身挡住窗外视线","detail":"别让人看见"},]}',
+    '```',
+    'save_script {"content":"## S4"}',
+  ].join('\n')
+  assert.equal(choicesFromPayload(messy)[2].label, '侧身挡住窗外视线')
+  const smart = '{"choices":[{"id":"c1","label":"翻开杯底那半张纸","detail":"对残字"},{"id":"c2","label":"低声问残字含义","detail":"问掌柜"},{"id":"c3","label":"去看椅背上的风衣","detail":"看袖口"}]}'
+    .replace(/"/g, '“')
+  assert.equal(choicesFromPayload(smart)[0].label, '翻开杯底那半张纸')
+
+  const listed = [
+    RPG_STATE_SENTINEL,
+    '1. 翻开杯底那半张纸：对残字',
+    '2. 低声问残字含义：问掌柜',
+    '3. 去看椅背上的风衣：看袖口',
+  ].join('\n')
+  assert.deepEqual(choicesFromPayload(listed).map(choice => choice.label), labels)
+  const bare = '["翻开杯底那半张纸","低声问残字含义","去看椅背上的风衣"]'
+  assert.deepEqual(choicesFromPayload(bare).map(choice => choice.label), labels)
+  const optionsKey = '{"options":[{"text":"翻开杯底那半张纸","hint":"对残字"},{"text":"低声问残字含义","hint":"问掌柜"},{"text":"去看椅背上的风衣","hint":"看袖口"}]}'
+  assert.equal(choicesFromPayload(optionsKey)[0].label, '翻开杯底那半张纸')
+
+  const template = '{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}'
+  assert.deepEqual(choicesFromPayload(template).map(choice => choice.label), ['仔细观察四周', '上前搭话', '先撤一步'])
+  assert.deepEqual(resolvePlayChoices(['你只是站着。', '']).map(choice => choice.label), ['仔细观察四周', '上前搭话', '先撤一步'])
+
+  const script = `## S4 | 内景 · 茶寮 | 夜\n\n${story}\n${RPG_STATE_SENTINEL}\n${real.replaceAll('\n', '')}`
+  assert.deepEqual(resolvePlayChoices([template, script]).map(choice => choice.label), labels)
+  const stripped = stripChoiceTail(script)
+  assert.doesNotMatch(stripped, /RPG_STATE|"choices"/)
+  assert.match(stripped, /窗外有人影贴着玻璃/)
+
+  const early = new NarrativeStreamParser()
+  const earlyText = [
+    `${RPG_STATE_SENTINEL}{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。`,
+    story,
+    RPG_STATE_SENTINEL,
+    real,
+    trailing,
+  ].join('\n')
+  let earlyLive = ''
+  for (let index = 0; index < earlyText.length; index += 5) {
+    earlyLive += early.push(earlyText.slice(index, index + 5))
+  }
+  const earlyDone = early.finish()
+  earlyLive += earlyDone.tail
+  assert.equal(earlyLive, story)
+  assert.deepEqual(choicesFromPayload(earlyDone.stateRaw).map(choice => choice.label), labels)
+
+  const absorbed = new NarrativeStreamParser()
+  let absorbedLive = absorbed.push(`我先读取本集已有正文。${story}`)
+  absorbed.absorbFinalText(`这一步不要输出任何文字。\n${RPG_STATE_SENTINEL}\n${real}`)
+  const absorbedDone = absorbed.finish()
+  absorbedLive += absorbedDone.tail
+  assert.equal(absorbedLive, story)
+  assert.deepEqual(choicesFromPayload(absorbedDone.stateRaw).map(choice => choice.label), labels)
 })
 
 test('screenplay scene can be read back as the player narrative', () => {
