@@ -14,6 +14,8 @@ import {
   projectWorldState,
   resolvePlayerAction,
   stripChoiceTail,
+  stripPipelineMeta,
+  visibleNarrative,
 } from '../src/services/rpg/turn.ts'
 import { OpenAIVideoAdapter } from '../src/services/adapters/openai-video.ts'
 import { LIVE_ACTION_CINEMATIC_STYLE } from '../src/services/live-action-cinematic.ts'
@@ -89,6 +91,63 @@ test('dossier comes from studio assets, not a narrator state blob', () => {
   assert.equal(projected.state.characters.some(item => item.name === '说书人捏造'), false)
   assert.equal(projected.state.items[0].holder, '信物')
   assert.equal(projected.state.quests[0].title, '找到搭档')
+})
+
+test('player narrative strips agent pipeline preambles and keeps the story', () => {
+  const act2 = '第2幕先落进剧本，再把给玩家看的正文补上。\n\n雨点砸在青瓦上，你还站在茶寮门外。'
+  const act3 = [
+    '我先读取本集已有正文，再按你选的走向续写第3幕并保存剧本。',
+    '残字已经对上，我先把这一幕写入剧本，再把给你看的正文补上。',
+    '你翻开杯底那半张纸，墨迹在灯下对上了。',
+  ].join('')
+  assert.equal(stripPipelineMeta(act2), '雨点砸在青瓦上，你还站在茶寮门外。')
+  assert.equal(stripPipelineMeta(act3), '你翻开杯底那半张纸，墨迹在灯下对上了。')
+  assert.equal(visibleNarrative(act3), stripPipelineMeta(act3))
+  assert.equal(visibleNarrative(visibleNarrative(act3)), visibleNarrative(act3))
+  const between = '你推开门。\n\n我先把这一幕写入剧本。\n\n灯还亮着。'
+  assert.equal(stripPipelineMeta(between), '你推开门。\n\n灯还亮着。')
+  assert.equal(stripPipelineMeta('你在灯下把那句残字写入纸页。'), '你在灯下把那句残字写入纸页。')
+  assert.equal(stripPipelineMeta('这封信是写给你看的。'), '这封信是写给你看的。')
+  assert.equal(stripPipelineMeta('你再把名字写入剧本。'), '你再把名字写入剧本。')
+  assert.equal(stripPipelineMeta('你写下要先看那封信，于是把茶盏翻了过来。'), '你写下要先看那封信，于是把茶盏翻了过来。')
+  assert.equal(stripPipelineMeta('我先读取告示上的名字。'), '我先读取告示上的名字。')
+  assert.equal(stripPipelineMeta('他调用维修工具，气闸开了一条缝。'), '他调用维修工具，气闸开了一条缝。')
+
+  const parser = new NarrativeStreamParser()
+  const preamble = '我先读取本集已有正文，再按你选的走向续写第3幕并保存剧本。残字已经对上，我先把这一幕写入剧本，再把给你看的正文补上。'
+  const story = '你翻开杯底那半张纸，墨迹在灯下对上了。灯花爆了一下。'
+  const choicesJson = '{"choices":[{"id":"c1","label":"翻开杯底那半张纸","detail":"对残字"},{"id":"c2","label":"先问掌柜","detail":"别打草惊蛇"},{"id":"c3","label":"把纸按回去","detail":"先不声张"}]}'
+  let live = ''
+  live += parser.push(preamble.slice(0, 8))
+  live += parser.push(preamble.slice(8, 24))
+  live += parser.push(preamble.slice(24) + story.slice(0, 5))
+  live += parser.push(story.slice(5) + RPG_STATE_SENTINEL + choicesJson)
+  const finished = parser.finish()
+  live += finished.tail
+  assert.equal(live, story)
+  assert.equal(finished.narrative, story)
+  assert.doesNotMatch(live, /读取本集|写入剧本|落进剧本|补上正文|给玩家看的正文|save_script/)
+  assert.equal(choicesFromPayload(finished.stateRaw)[0].label, '翻开杯底那半张纸')
+  assert.equal(choicesFromPayload(finished.stateRaw)[2].label, '把纸按回去')
+
+  const state = emptyWorldState()
+  state.scene = { location: '雾隐茶寮', time: '子时', summary: '', atmosphere: '' }
+  const screenplay = formatScreenplayScene(2, state, act2, '推门进去')
+  assert.equal(narrativeFromScreenplay(screenplay, 2), '雨点砸在青瓦上，你还站在茶寮门外。')
+  assert.deepEqual(
+    locationFromNarrativeHeader(`我先把这一幕写入剧本。\n## S3 | 内景 · 茶寮 | 夜\n你掀开杯子。`),
+    { location: '茶寮', time: '夜' },
+  )
+
+  const salvaged = new NarrativeStreamParser()
+  const looseStory = '你在门口站了很久，雨把肩头打湿，茶香从门缝里渗出来。'
+  const looseJson = '{"choices":[{"id":"c1","label":"推门","detail":"进去"},{"id":"c2","label":"看信","detail":"先不进门"}]}'
+  const looseLive = salvaged.push(`我先读取本集已有正文，再保存剧本。${looseStory}${looseJson}`)
+  const looseFinished = salvaged.finish()
+  assert.equal(`${looseLive}${looseFinished.tail}`, looseStory)
+  assert.equal(looseFinished.narrative, looseStory)
+  assert.equal(choicesFromPayload(looseFinished.stateRaw)[0].label, '推门')
+  assert.equal(choicesFromPayload(looseFinished.stateRaw)[1].label, '看信')
 })
 
 test('screenplay scene can be read back as the player narrative', () => {
@@ -168,6 +227,8 @@ test('play still and video prompts keep the live-action cinema style', () => {
   assert.match(rewrite, /read_episode_script/)
   assert.match(rewrite, /save_script/)
   assert.match(rewrite, /script_rewriter|剧本改写/)
+  assert.match(rewrite, /从故事的第一句写起/)
+  assert.match(rewrite, /不要输出任何文字/)
   assert.doesNotMatch(rewrite, /chat\/completions/)
   const storyboard = buildPlayStoryboardMessage({
     turnIndex: 2,

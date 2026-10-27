@@ -31,6 +31,7 @@ import {
   sceneIdFromScreenplay,
   scriptHasScene,
   stripChoiceTail,
+  stripPipelineMeta,
   visibleNarrative,
   type ResolvedAction,
   type RpgChoice,
@@ -198,10 +199,11 @@ export async function narrateSession(
       },
     })
     const finished = parser.finish()
-    await commitScreenplay(loaded, turnIndex, resolved.action, finished.narrative)
+    if (finished.tail) await onDelta(finished.tail)
+    await commitScreenplay(loaded, turnIndex, resolved.action, finished.rawNarrative)
     const scriptEpisode = await readEpisode(loaded.session.episodeId)
     const script = scriptEpisode?.scriptContent || ''
-    const narrative = visibleNarrative(finished.narrative) || narrativeFromScreenplay(script, turnIndex)
+    const narrative = finished.narrative || narrativeFromScreenplay(script, turnIndex)
     if (!narrative) throw new Error('这一幕没有写完，请再试一次')
     await syncAssets(loaded.session.episodeId, loaded.session.dramaId)
     const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
@@ -240,7 +242,7 @@ export async function illustrateSession(sessionId: number) {
     scenePrompt: scene.prompt || state.scene.summary,
     lighting: scene.lighting || state.scene.atmosphere,
     characters: state.characters,
-    narrative: turn.narrative,
+    narrative: visibleNarrative(turn.narrative),
   })
   const taskId = await generateImage({
     dramaId: loaded.session.dramaId,
@@ -394,9 +396,10 @@ async function ensurePlayStoryboard(
   if (turn.storyboardId) return turn.storyboardId
   const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
   const episode = await readEpisode(loaded.session.episodeId)
+  const prose = visibleNarrative(turn.narrative)
   const screenplay = scriptHasScene(episode?.scriptContent || '', turn.turnIndex)
     ? narrativeBlock(episode?.scriptContent || '', turn.turnIndex)
-    : formatScreenplayScene(turn.turnIndex, state, turn.narrative, turn.playerText)
+    : formatScreenplayScene(turn.turnIndex, state, prose, turn.playerText)
   const videoLabel = await videoModelLabel(loaded.session.episodeId)
   try {
     await runStudioAgent({
@@ -407,7 +410,7 @@ async function ensurePlayStoryboard(
       storyboardShotNumber: turn.turnIndex,
       message: buildPlayStoryboardMessage({
         turnIndex: turn.turnIndex,
-        narrative: turn.narrative,
+        narrative: prose,
         screenplay,
         videoLabel,
         characters: assets.characters.map(item => ({ id: item.id, name: item.name })),
@@ -429,7 +432,17 @@ async function ensurePlayStoryboard(
 
 function narrativeBlock(script: string, turnIndex: number) {
   const match = script.match(new RegExp(`##\\s*S${turnIndex}\\b[\\s\\S]*?(?=\\n##\\s*S\\d+\\b|$)`))
-  return match?.[0]?.trim() || script
+  const block = match?.[0]?.trim() || script
+  return block
+    .split('\n')
+    .map(line => {
+      const trimmed = line.trim()
+      if (!trimmed || /^##\s*S\d+\b/.test(trimmed) || /^（玩家行动）/.test(trimmed)) return line
+      return stripPipelineMeta(line)
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 async function insertFallbackStoryboard(
@@ -447,7 +460,7 @@ async function insertFallbackStoryboard(
     title: state.scene.location,
     location: state.scene.location,
     time: state.scene.time,
-    description: `【镜头1】${turn.narrative}`,
+    description: `【镜头1】${visibleNarrative(turn.narrative)}`,
     atmosphere: state.scene.atmosphere,
     duration: 6,
     status: 'pending',
@@ -543,7 +556,7 @@ async function loadPlay(sessionId: number): Promise<PlayContext> {
   const latest = turns[turns.length - 1]
   const recent = turns.slice(-4).map(turn => {
     const player = turn.playerText ? `玩家：${turn.playerText}\n` : ''
-    return `第${turn.turnIndex}幕\n${player}${turn.narrative}`
+    return `第${turn.turnIndex}幕\n${player}${visibleNarrative(turn.narrative)}`
   }).join('\n\n')
   return {
     session,
@@ -610,7 +623,7 @@ function serializeTurn(turn: typeof schema.rpgTurns.$inferSelect & {
     player_mode: turn.playerMode,
     player_text: turn.playerText,
     choice_id: turn.choiceId,
-    narrative: turn.narrative,
+    narrative: visibleNarrative(turn.narrative),
     choices: parseJson<RpgChoice[]>(turn.choices, []),
     world_state: parseJson<RpgWorldState>(turn.worldState, emptyWorldState()),
     scene_id: turn.sceneId,

@@ -105,11 +105,18 @@ export function resolvePlayerAction(
   return { ok: false, message: '请点选剧情走向，或写下你的行动' }
 }
 
-/** 把模型流式输出拆成「可展示的叙事」和「回合结束后的状态 JSON」 */
+/**
+ * 把模型流式输出拆成「可展示的叙事」和「回合结束后的状态 JSON」。
+ * script_rewriter 的多步 textStream 会把工具前后的工序说明和正文拼在一起，
+ * 这里按句丢掉工序说明，玩家只收到故事。
+ */
 export class NarrativeStreamParser {
   private pending = ''
   private stateRaw = ''
   private inState = false
+  private rawNarrative = ''
+  private held = ''
+  private seenProse = false
   narrative = ''
 
   push(chunk: string): string {
@@ -119,43 +126,151 @@ export class NarrativeStreamParser {
       return ''
     }
     this.pending += chunk
+    const fresh = this.pullFreshNarrative()
+    if (!fresh) return ''
+    this.rawNarrative += fresh
+    this.held += fresh
+    return this.flushHeld(false)
+  }
+
+  finish(): { narrative: string; rawNarrative: string; stateRaw: string; tail: string } {
+    if (!this.inState) {
+      const combined = this.rawNarrative + this.pending
+      const marker = trailingStateIndex(combined)
+      if (marker !== -1) {
+        const narrativeRaw = combined.slice(0, marker)
+        const consumed = this.rawNarrative.length - this.held.length
+        this.rawNarrative = narrativeRaw
+        this.held = narrativeRaw.slice(Math.min(Math.max(consumed, 0), narrativeRaw.length))
+        this.stateRaw = combined.slice(marker).trim()
+      } else {
+        this.held += this.pending
+        this.rawNarrative = combined
+      }
+      this.pending = ''
+    }
+    const tail = this.flushHeld(true)
+    const narrative = visibleNarrative(this.rawNarrative)
+    this.narrative = narrative
+    return {
+      narrative,
+      rawNarrative: this.rawNarrative.trim(),
+      stateRaw: this.stateRaw.trim(),
+      tail,
+    }
+  }
+
+  private pullFreshNarrative(): string {
     const marker = this.pending.indexOf(RPG_STATE_SENTINEL)
     if (marker === -1) {
       const hold = RPG_STATE_SENTINEL.length - 1
       if (this.pending.length <= hold) return ''
       const visible = this.pending.slice(0, this.pending.length - hold)
       this.pending = this.pending.slice(this.pending.length - hold)
-      this.narrative += visible
       return visible
     }
     const visible = this.pending.slice(0, marker)
-    this.narrative += visible
     this.stateRaw = this.pending.slice(marker + RPG_STATE_SENTINEL.length)
     this.pending = ''
     this.inState = true
     return visible
   }
 
-  finish(): { narrative: string; stateRaw: string } {
-    if (!this.inState) {
-      const salvaged = salvageTrailingState(this.narrative + this.pending)
-      this.narrative = salvaged.narrative
-      this.stateRaw = salvaged.stateRaw
-      this.pending = ''
+  /** 句子没收尾时先攒着，避免工序说明只到一半就被推给玩家。 */
+  private flushHeld(final: boolean): string {
+    let emitted = ''
+    while (this.held) {
+      const next = takeSentence(this.held, final)
+      if (!next) break
+      this.held = next.rest
+      if (isPipelineMetaSentence(next.sentence)) continue
+      if (!next.sentence.trim()) {
+        if (!this.seenProse) continue
+        emitted += next.sentence
+        continue
+      }
+      this.seenProse = true
+      emitted += next.sentence
     }
-    return { narrative: this.narrative.trim(), stateRaw: this.stateRaw.trim() }
+    return emitted
   }
 }
 
-export function salvageTrailingState(text: string): { narrative: string; stateRaw: string } {
-  const marker = text.lastIndexOf('{')
-  if (marker > 20) {
-    const candidate = text.slice(marker)
-    if (candidate.includes('"choices"') || candidate.includes('"scene"')) {
-      return { narrative: text.slice(0, marker).trim(), stateRaw: candidate.trim() }
+/** 没有分隔符时，从含 choices / scene 的那一层 { 切开，而不是最内层括号。 */
+function trailingStateIndex(text: string): number {
+  let best = -1
+  for (const key of ['"choices"', '"scene"']) {
+    let from = 0
+    while (from < text.length) {
+      const keyAt = text.indexOf(key, from)
+      if (keyAt === -1) break
+      const brace = text.lastIndexOf('{', keyAt)
+      if (brace > 20 && (best === -1 || brace < best)) best = brace
+      from = keyAt + key.length
     }
   }
-  return { narrative: text.trim(), stateRaw: '' }
+  return best
+}
+
+export function salvageTrailingState(text: string): { narrative: string; stateRaw: string } {
+  const marker = trailingStateIndex(text)
+  if (marker === -1) return { narrative: text.trim(), stateRaw: '' }
+  return { narrative: text.slice(0, marker).trim(), stateRaw: text.slice(marker).trim() }
+}
+
+const SENTENCE_PATTERN = /[^。！？!?\n]*[。！？!?]+|[^。！？!?\n]+/g
+
+function takeSentence(text: string, final: boolean): { sentence: string; rest: string } | null {
+  const match = text.match(/^[。！？!?\n]|[^。！？!?\n]+[。！？!?\n]?/)
+  if (!match?.[0]) return null
+  const sentence = match[0]
+  if (!final && !/[。！？!?\n]$/.test(sentence)) return null
+  return { sentence, rest: text.slice(sentence.length) }
+}
+
+/**
+ * 工序说明和故事正文走的是同一条 textStream。
+ * 只丢掉「读本集 / 写入剧本 / 补上正文」这类句子，不改故事里的纸页、信和杯子。
+ */
+export function isPipelineMetaSentence(sentence: string): boolean {
+  const text = sentence.replace(/\s+/g, '')
+  if (!text) return false
+  if (/^##S\d+\b/.test(text)) return true
+  if (/read_episode_script|save_script/i.test(text)) return true
+  if (/给(?:玩家|你)看的正文/.test(text)) return true
+  if (/落进剧本|保存剧本|保存完整剧本/.test(text)) return true
+  if (/读取(?:本集|当前集)|已有正文|先读本集/.test(text)) return true
+  if (/续写第\d+幕/.test(text)) return true
+  if (/补上正文|正文补上/.test(text)) return true
+  if (/先把这一幕|这一幕写入剧本/.test(text)) return true
+  if (/写入剧本/.test(text) && /(?:我|先把|补上|保存|读取|这一幕)/.test(text)) return true
+  if (/剧本改写|不要绕过工具|不要写进回复|不要输出任何文字|从故事的第一句/.test(text)) return true
+  if (/^(?:我先|让我先|接下来我)/.test(text) && /(?:剧本|正文|本集|续写第)/.test(text)) return true
+  return false
+}
+
+export function stripPipelineMeta(text: string): string {
+  if (!text) return ''
+  const ranges: Array<{ start: number; end: number }> = []
+  const pattern = new RegExp(SENTENCE_PATTERN.source, 'g')
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(text))) {
+    if (!match[0].trim()) continue
+    ranges.push({ start: match.index, end: match.index + match[0].length })
+  }
+  let kept = ''
+  let cursor = 0
+  for (const range of ranges) {
+    if (!isPipelineMetaSentence(text.slice(range.start, range.end))) continue
+    kept += text.slice(cursor, range.start)
+    cursor = range.end
+  }
+  kept += text.slice(cursor)
+  return kept
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\s+/, '')
+    .replace(/[ \t]+$/, '')
 }
 
 /** 只读取剧情分支。角色、场景、物品以提取 Agent 写入的资产为准，不采用这段 JSON。 */
@@ -240,7 +355,7 @@ export function scriptHasScene(script: string, turnIndex: number): boolean {
 export function narrativeFromScreenplay(script: string, turnIndex: number): string {
   const match = (script || '').match(new RegExp(`##\\s*S${turnIndex}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s*S\\d+\\b|$)`))
   if (!match) return ''
-  return match[1].replace(/^\s*（玩家行动）[^\n]*\n+/, '').trim()
+  return visibleNarrative(match[1].replace(/^\s*（玩家行动）[^\n]*\n+/, ''))
 }
 
 export function stripChoiceTail(script: string): string {
@@ -250,12 +365,12 @@ export function stripChoiceTail(script: string): string {
 }
 
 export function visibleNarrative(text: string): string {
-  return text.replace(/^##\s*S\d+[^\n]*\n+/, '').trim()
+  return stripPipelineMeta(text).trim()
 }
 
 /** 模型若把场景头写进回复，回退补剧本时沿用这个地点，而不是上一幕的地点。 */
 export function locationFromNarrativeHeader(text: string): { location: string; time: string } | null {
-  const match = text.match(/^##\s*S\d+\s*\|[^|\n]*·\s*([^|\n]+?)\s*\|\s*([^\n]+)/)
+  const match = text.match(/(?:^|\n)##\s*S\d+\s*\|[^|\n]*·\s*([^|\n]+?)\s*\|\s*([^\n]+)/)
   if (!match) return null
   const location = match[1].trim()
   const time = match[2].trim()
@@ -322,7 +437,7 @@ export function buildPlayRewriteMessage(input: {
   recent: string
 }): string {
   return [
-    '这是互动短剧「织界」的一回合。你仍是剧本改写 Agent：先读本集，再把本幕写入剧本。不要绕过工具直接结束。',
+    '这是互动短剧「织界」的一回合。你仍是剧本改写 Agent，必须用工具读完再保存。不要绕过工具直接结束。工具调用不要写进回复。',
     `世界：${input.worldTitle}`,
     input.genre ? `类型：${input.genre}` : '',
     `设定：${input.premise}`,
@@ -332,10 +447,10 @@ export function buildPlayRewriteMessage(input: {
       : '还没有已保存的剧本。',
     input.actionLine,
     '请按顺序完成：',
-    '1. 调用 read_episode_script 读取当前集正文。',
-    `2. 回复正文只写给玩家看的第 ${input.turnIndex} 幕：简体中文，第二人称「你」，280 到 420 字，一段或两段。不要写场景头，不要复述旧剧本，不要写「选项」三个字。`,
+    '1. 调用 read_episode_script 读取当前集正文。这一步不要输出任何文字。',
+    `2. 回复只写第 ${input.turnIndex} 幕的故事，并且从故事的第一句写起：简体中文，第二人称「你」，280 到 420 字，一段或两段。不要写场景头，不要复述旧剧本，不要写「选项」三个字。不要写计划、步骤或工作说明，也不要出现「读取本集」「写入剧本」「落进剧本」「保存剧本」「补上正文」「给玩家看的正文」。`,
     `3. 正文结束后另起一行，只输出一次 ${RPG_STATE_SENTINEL}，然后输出 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。恰好 3 条，方向不同。不要用 markdown 代码块。不要在 JSON 里写角色、物品或场景；那些由提取 Agent 从剧本里读取。`,
-    `4. 调用 save_script 保存完整剧本：已有场景全部保留，并追加一个场景，场景头为 ## S${input.turnIndex} | 内景或外景 · 地点 | 时间。格式化剧本只放进 save_script，不要把分隔符和 JSON 写进剧本。不要替玩家写结局。`,
+    `4. 调用 save_script 保存完整剧本：已有场景全部保留，并追加一个场景，场景头为 ## S${input.turnIndex} | 内景或外景 · 地点 | 时间。这一步不要输出任何文字。格式化剧本只放进 save_script，不要把分隔符和 JSON 写进剧本。不要替玩家写结局。`,
   ].filter(Boolean).join('\n\n')
 }
 
