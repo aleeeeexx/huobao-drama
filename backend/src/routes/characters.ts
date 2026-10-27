@@ -3,13 +3,11 @@ import { and, eq } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../db/index.js'
 import { success, created, badRequest, now } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
-import { generateImage } from '../services/generation.js'
-import { getDramaStylePrompt } from '../services/style-preset.js'
+import { enqueueAssetReferenceImage } from '../services/asset-images.js'
 import { ensureCharacterFinalPrompt } from '../services/final-prompt.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
-const CHARACTER_IMAGE_SIZE = '1920x1080'
 
 // POST /characters — 手动新增角色（传入 episode_id 时关联到该集）
 app.post('/', async (c) => {
@@ -38,20 +36,6 @@ app.post('/', async (c) => {
   const [row] = await db.select().from(schema.characters).where(eq(schema.characters.id, charId))
   return created(c, toSnakeCase(row))
 })
-
-function characterImagePrompt(char: typeof schema.characters.$inferSelect, stylePrompt = '') {
-  return [
-    stylePrompt || '',
-    char.name,
-    char.appearance || char.description || '人物立绘',
-    char.styling || '',
-    '16:9 横版角色定妆照',
-    '半身角色海报构图',
-    '正面',
-    '高质量',
-    '白色背景',
-  ].filter(Boolean).join(', ')
-}
 
 // PUT /characters/:id
 app.put('/:id', async (c) => {
@@ -88,14 +72,17 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id)))
   if (!ep) return badRequest(c, '剧集不存在')
 
-  const stylePrompt = await getDramaStylePrompt(char.dramaId)
-  const finalPrompt = await ensureCharacterFinalPrompt(char, ep.id, false, { model: body.text_model, configId: body.text_config_id ?? undefined })
-  const prompt = finalPrompt || characterImagePrompt(char, stylePrompt)
   try {
-    logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
-    const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, model: body.model, size: CHARACTER_IMAGE_SIZE, configId: body.config_id ?? ep.imageConfigId ?? undefined })
-    logTaskSuccess('CharacterImage', 'generate', { characterId: id, generationId: genId })
-    return success(c, { image_generation_id: genId })
+    const enqueued = await enqueueAssetReferenceImage('character', id, {
+      episodeId: ep.id,
+      model: body.model,
+      configId: body.config_id ?? ep.imageConfigId ?? undefined,
+      textModel: body.text_model,
+      textConfigId: body.text_config_id ?? undefined,
+      skipIfPresent: false,
+    })
+    if (!enqueued.taskId) return badRequest(c, '图片任务没有提交')
+    return success(c, { image_generation_id: enqueued.taskId })
   } catch (err: any) {
     logTaskError('CharacterImage', 'generate', { characterId: id, error: err.message })
     return badRequest(c, err.message)
@@ -131,15 +118,19 @@ app.post('/batch-generate-images', async (c) => {
   const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id)))
   if (!ep) return badRequest(c, '剧集不存在')
   const results: number[] = []
-  const stylePrompt = await getDramaStylePrompt(ep.dramaId)
   for (const cid of ids) {
     const [char] = await db.select().from(schema.characters).where(eq(schema.characters.id, cid))
     if (!char) continue
-    const finalPrompt = await ensureCharacterFinalPrompt(char, ep.id, false, { model: body.text_model, configId: body.text_config_id ?? undefined })
-    const prompt = finalPrompt || characterImagePrompt(char, stylePrompt)
     try {
-      const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, model: body.model, size: CHARACTER_IMAGE_SIZE, configId: body.config_id ?? ep.imageConfigId ?? undefined })
-      results.push(genId)
+      const enqueued = await enqueueAssetReferenceImage('character', cid, {
+        episodeId: ep.id,
+        model: body.model,
+        configId: body.config_id ?? ep.imageConfigId ?? undefined,
+        textModel: body.text_model,
+        textConfigId: body.text_config_id ?? undefined,
+        skipIfPresent: false,
+      })
+      if (enqueued.taskId) results.push(enqueued.taskId)
     } catch {}
   }
   logTaskSuccess('CharacterImage', 'batch-generate', { episodeId: ep.id, requested: ids.length, started: results.length })

@@ -341,7 +341,7 @@ async function illustrate() {
   mediaBusy.value = 'image'
   try {
     await rpgAPI.illustrate(sessionId.value)
-    toast('正在画这一幕')
+    toast('正在对照定妆和场景图画这一幕')
     await load()
     startPoll()
   } catch (error) {

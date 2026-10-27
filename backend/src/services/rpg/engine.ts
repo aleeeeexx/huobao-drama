@@ -10,6 +10,17 @@ import { generateImage, generateVideo } from '../generation.js'
 import { EXTRACT_TARGETS, runExtraction } from '../extraction.js'
 import { getDramaStylePrompt, prefixVideoStyle } from '../style-preset.js'
 import { ensureSceneFinalPrompt } from '../final-prompt.js'
+import { resolveAssetReferenceImage, scheduleEpisodeAssetImages } from '../asset-images.js'
+import {
+  applyReferenceMarkers,
+  buildStillReferences,
+  PLAY_REFERENCE_WAIT_MS,
+  PLAY_STILL_FRAME,
+  selectPlayCharacters,
+  selectPlayProps,
+  stillPromptCharacters,
+  VIDEO_REFERENCE_LIMIT,
+} from './references.js'
 import { videoModelLabel, writeStoryboardVideoPrompt } from '../video-prompts.js'
 import { runStudioAgent } from '../agent-runner.js'
 import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
@@ -213,6 +224,7 @@ export async function narrateSession(
     const narrative = finished.narrative || narrativeFromScreenplay(script, turnIndex)
     if (!narrative) throw new Error('这一幕没有写完，请再试一次')
     await syncAssets(loaded.session.episodeId, loaded.session.dramaId)
+    scheduleEpisodeAssetImages(loaded.session.dramaId, loaded.session.episodeId)
     const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
     const preferredSceneId = sceneIdFromScreenplay(script, turnIndex, assets.scenes)
     const projected = projectWorldState(loaded.state, assets, preferredSceneId)
@@ -235,27 +247,33 @@ export async function illustrateSession(sessionId: number) {
     }
   }
   const state = parseJson<RpgWorldState>(turn.worldState, loaded.state)
-  const scene = await sceneForTurn(loaded, turn.sceneId)
-  const [sceneFinalPrompt, stylePrompt] = await Promise.all([
-    ensureSceneFinalPrompt(scene, loaded.session.episodeId, true),
-    getDramaStylePrompt(loaded.session.dramaId),
-  ])
+  const narrative = visibleNarrative(turn.narrative)
+  const plates = await platesForTurn(loaded, narrative, state, turn.sceneId, [], [])
+  if (!plates.scene) throw new Error('这一幕还没有场景资产。续写时会用提取 Agent 写入场景，请再试一次。')
+  const stylePrompt = await getDramaStylePrompt(loaded.session.dramaId)
+  const sceneFinalPrompt = plates.sceneFinalPrompt || await ensureScenePlatePrompt(plates.scene, loaded.session.episodeId)
   const prompt = assembleStillPrompt({
     stylePrompt,
     sceneFinalPrompt,
-    location: scene.location,
-    time: scene.time || state.scene.time,
-    scenePrompt: scene.prompt || state.scene.summary,
-    lighting: scene.lighting || state.scene.atmosphere,
-    characters: state.characters,
-    narrative: visibleNarrative(turn.narrative),
+    location: plates.scene.location,
+    time: plates.scene.time || state.scene.time,
+    scenePrompt: plates.scene.prompt || state.scene.summary,
+    lighting: plates.scene.lighting || state.scene.atmosphere,
+    characters: plates.promptCharacters,
+    narrative,
+    references: plates.references,
   })
+  const referenceImages = plates.references.map(item => item.imageUrl)
+  const episode = await readEpisode(loaded.session.episodeId)
+  // 剧情图不要写回 sceneId：writeBack 会把成片盖到场景空镜上，后面的镜头就锁不住同一个环境。
   const taskId = await generateImage({
     dramaId: loaded.session.dramaId,
-    sceneId: scene.id,
     prompt,
+    frameType: PLAY_STILL_FRAME,
+    referenceImages: referenceImages.length ? referenceImages : undefined,
+    configId: episode?.imageConfigId ?? undefined,
   })
-  await db.update(schema.rpgTurns).set({ imageTaskId: taskId, sceneId: scene.id }).where(eq(schema.rpgTurns.id, turn.id))
+  await db.update(schema.rpgTurns).set({ imageTaskId: taskId, sceneId: plates.scene.id }).where(eq(schema.rpgTurns.id, turn.id))
   return { task_id: taskId, status: 'processing' }
 }
 
@@ -273,6 +291,27 @@ export async function filmSession(sessionId: number) {
   const storyboardId = await ensurePlayStoryboard(loaded, turn, state)
   const [storyboard] = await db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId))
   if (!storyboard) throw new Error('这一幕的分镜没有保存下来')
+  const narrative = visibleNarrative(turn.narrative)
+  const [characterLinks, propLinks] = await Promise.all([
+    db.select().from(schema.storyboardCharacters).where(eq(schema.storyboardCharacters.storyboardId, storyboardId)),
+    db.select().from(schema.storyboardProps).where(eq(schema.storyboardProps.storyboardId, storyboardId)),
+  ])
+  const platesPromise = platesForTurn(
+    loaded,
+    narrative,
+    state,
+    storyboard.sceneId || turn.sceneId,
+    characterLinks.map(link => link.characterId),
+    propLinks.map(link => link.propId),
+  ).catch(error => {
+    console.error('[rpg] reference plates', error instanceof Error ? error.message : error)
+    return {
+      scene: null,
+      sceneFinalPrompt: '',
+      references: [],
+      promptCharacters: [],
+    }
+  })
   let videoPrompt = (storyboard.videoPrompt || '').trim()
   if (!videoPrompt) {
     videoPrompt = await writeStoryboardVideoPrompt(
@@ -282,13 +321,25 @@ export async function filmSession(sessionId: number) {
     )
   }
   if (!videoPrompt) throw new Error('这一幕的视频提示词没有写出来，请再试一次')
-  const stylePrompt = await getDramaStylePrompt(loaded.session.dramaId)
-  const fresh = await refreshTurnMedia(turn)
+  const [stylePrompt, fresh, plates] = await Promise.all([
+    getDramaStylePrompt(loaded.session.dramaId),
+    refreshTurnMedia(turn),
+    platesPromise,
+  ])
+  const videoReferences = buildStillReferences({
+    extras: [
+      ...plates.references,
+      ...(fresh.imageUrl ? [{ kind: 'still' as const, name: '', imageUrl: fresh.imageUrl }] : []),
+    ],
+    limit: VIDEO_REFERENCE_LIMIT,
+  })
+  const referenceImageUrls = videoReferences.map(item => item.imageUrl)
   const taskId = await generateVideo({
     dramaId: loaded.session.dramaId,
     storyboardId,
-    prompt: prefixVideoStyle(stylePrompt, videoPrompt),
+    prompt: prefixVideoStyle(stylePrompt, applyReferenceMarkers(videoPrompt, videoReferences)),
     imageUrl: fresh.imageUrl || undefined,
+    referenceImageUrls: referenceImageUrls.length ? referenceImageUrls : undefined,
     referenceMode: fresh.imageUrl ? 'first_frame' : 'reference',
     duration: storyboard.duration && storyboard.duration > 0 ? storyboard.duration : 6,
     aspectRatio: '16:9',
@@ -381,6 +432,56 @@ async function persistTurn(
   }).where(eq(schema.rpgSessions.id, loaded.session.id))
   const [turn] = await db.select().from(schema.rpgTurns).where(eq(schema.rpgTurns.id, turnId))
   return turn
+}
+
+async function platesForTurn(
+  loaded: PlayContext,
+  narrative: string,
+  state: RpgWorldState,
+  sceneId: number | null,
+  boundCharacterIds: number[],
+  boundPropIds: number[],
+) {
+  const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
+  let scene: typeof schema.scenes.$inferSelect | null = null
+  try {
+    scene = await sceneForTurn(loaded, sceneId)
+  } catch {
+    scene = null
+  }
+  const characters = selectPlayCharacters(assets.characters, narrative, boundCharacterIds)
+  const props = selectPlayProps(assets.props, narrative, boundPropIds)
+  const waitUntil = Date.now() + PLAY_REFERENCE_WAIT_MS
+  const base = {
+    episodeId: loaded.session.episodeId,
+    skipIfPresent: true,
+    retryFailed: true,
+    resolveConfigFromEpisode: true,
+    waitUntil,
+  }
+  const [scenePlate, characterPlates, propPlates] = await Promise.all([
+    scene ? resolveAssetReferenceImage('scene', scene.id, base) : Promise.resolve({ taskId: null, imageUrl: null, finalPrompt: '' }),
+    Promise.all(characters.map(item => resolveAssetReferenceImage('character', item.id, base))),
+    Promise.all(props.map(item => resolveAssetReferenceImage('prop', item.id, base))),
+  ])
+  const references = buildStillReferences({
+    scene: scene ? { name: scene.location, imageUrl: scenePlate.imageUrl } : null,
+    characters: characters.map((item, index) => ({ name: item.name, imageUrl: characterPlates[index]?.imageUrl })),
+    props: props.map((item, index) => ({ name: item.name, imageUrl: propPlates[index]?.imageUrl })),
+  })
+  return {
+    scene,
+    sceneFinalPrompt: scenePlate.finalPrompt,
+    references,
+    promptCharacters: stillPromptCharacters(characters, state.characters),
+  }
+}
+
+async function ensureScenePlatePrompt(scene: typeof schema.scenes.$inferSelect, episodeId: number) {
+  const [fresh] = await db.select().from(schema.scenes).where(eq(schema.scenes.id, scene.id))
+  if (!fresh || fresh.deletedAt) return scene.finalPrompt || ''
+  if (fresh.finalPrompt) return fresh.finalPrompt
+  return ensureSceneFinalPrompt(fresh, episodeId, false)
 }
 
 async function sceneForTurn(loaded: PlayContext, sceneId: number | null) {

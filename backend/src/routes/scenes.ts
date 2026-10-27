@@ -2,8 +2,7 @@ import { Hono } from 'hono'
 import { and, eq } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../db/index.js'
 import { success, created, badRequest, now } from '../utils/response.js'
-import { generateImage } from '../services/generation.js'
-import { getDramaStylePrompt } from '../services/style-preset.js'
+import { enqueueAssetReferenceImage } from '../services/asset-images.js'
 import { ensureSceneFinalPrompt } from '../services/final-prompt.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
@@ -73,26 +72,18 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id)))
   if (!ep) return badRequest(c, '剧集不存在')
 
-  const stylePrompt = await getDramaStylePrompt(scene.dramaId)
-  const finalPrompt = await ensureSceneFinalPrompt(scene, ep.id, false, { model: body.text_model, configId: body.text_config_id ?? undefined })
-  // 回退拼接也要守住无人物约束：场景描述(prompt)可能含人物活动，直接拼会让人混进图里
-  const prompt = finalPrompt || [
-    stylePrompt || '',
-    scene.location,
-    scene.time || '',
-    scene.prompt || '高质量场景',
-    scene.lighting || '电影感光影',
-    '画面中没有任何人物，空场景，只有场景本身',
-  ].filter(Boolean).join(', ')
   try {
-    logTaskStart('SceneImage', 'generate', { sceneId: id, episodeId: ep.id, dramaId: scene.dramaId, location: scene.location })
-    await db.update(schema.scenes).set({ status: 'processing', updatedAt: now() }).where(eq(schema.scenes.id, id))
-    const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, model: body.model, configId: body.config_id ?? ep.imageConfigId ?? undefined })
-    logTaskSuccess('SceneImage', 'generate', { sceneId: id, generationId: genId })
-    return success(c, { image_generation_id: genId })
+    const enqueued = await enqueueAssetReferenceImage('scene', id, {
+      episodeId: ep.id,
+      model: body.model,
+      configId: body.config_id ?? ep.imageConfigId ?? undefined,
+      textModel: body.text_model,
+      textConfigId: body.text_config_id ?? undefined,
+      skipIfPresent: false,
+    })
+    if (!enqueued.taskId) return badRequest(c, '图片任务没有提交')
+    return success(c, { image_generation_id: enqueued.taskId })
   } catch (err: any) {
-    logTaskError('SceneImage', 'generate', { sceneId: id, error: err.message })
-    await db.update(schema.scenes).set({ status: 'failed', updatedAt: now() }).where(eq(schema.scenes.id, id))
     return badRequest(c, err.message)
   }
 })
