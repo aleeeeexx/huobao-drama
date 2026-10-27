@@ -62,7 +62,7 @@ app.post('/sessions/:id/image', async (c) => {
   try {
     return success(c, await illustrateSession(Number(c.req.param('id'))))
   } catch (error) {
-    return badRequest(c, error instanceof Error ? error.message : '插画生成失败')
+    return badRequest(c, error instanceof Error ? error.message : '剧情图生成失败')
   }
 })
 
