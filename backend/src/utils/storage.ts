@@ -157,6 +157,14 @@ export async function compressReferenceImage(input: string | Buffer): Promise<st
   return compressImageAsDataUrl(input)
 }
 
+/** 把参考图压成 JPEG 落到 static/images，供 https 源站给 Grok 拉取。 */
+export async function saveCompressedReferenceFile(relativePath: string): Promise<string> {
+  const dataUrl = await compressReferenceImage(getAbsolutePath(relativePath))
+  const parsed = parseDataUrl(dataUrl)
+  if (!parsed) throw new Error('参考图压缩失败')
+  return saveBase64Image(parsed.data, parsed.mimeType, 'images')
+}
+
 /** sharp 输入 → 压缩 JPEG data URL（本地路径与远程下载共享同一压缩管线） */
 async function compressImageAsDataUrl(
   input: string | Buffer,

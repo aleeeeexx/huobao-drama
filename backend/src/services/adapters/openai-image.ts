@@ -2,8 +2,8 @@
  * OpenAI 兼容图片适配器。
  * 文生图: POST /v1/images/generations（JSON）。
  * GPT Image 参考图: POST /v1/images/edits，multipart 里重复字段名 image（不是 image[]）。
- * codecc 上的 Grok Imagine 不接受 multipart，edits 必须是 JSON：
- *   一张参考图用 image，多张用 images（最多 5 张），并带 response_format。
+   * codecc 上的 Grok Imagine 不接受 multipart，edits 必须是 JSON：
+ *   一张参考图用 image，多张用 images（最多 5 张），url 必须是 https，并带 response_format。
  * 响应: { data: [{ url }] } 或 { data: [{ b64_json }] }。
  */
 import type {
@@ -77,7 +77,7 @@ export class OpenAIImageAdapter implements ImageProviderAdapter {
 
   /**
    * xAI / codecc：application/json。一张图用 image，两张及以上用 images。
-   * 不接受 OpenAI 的 multipart，字段名也不是 image[]。
+   * url 必须是供应商能 GET 的 https。data URL 会让这条网关 502。
    */
   private buildGrokEditsRequest(
     config: AIConfig,
@@ -89,12 +89,12 @@ export class OpenAIImageAdapter implements ImageProviderAdapter {
     const images: Array<{ type: 'image_url'; url: string }> = []
     for (const ref of refs) {
       const url = ref.trim()
-      if (!url.startsWith('data:image/') && !/^https?:\/\//.test(url)) continue
+      if (!url.startsWith('https://')) continue
       images.push({ type: 'image_url', url })
       if (images.length >= GROK_IMAGE_REFERENCE_LIMIT) break
     }
     if (!images.length) {
-      throw new Error('参考图片无法交给 Grok 编辑（需要 data URL 或 http(s) 地址）')
+      throw new Error('参考图片无法交给 Grok 编辑（需要可拉取的 https 地址）')
     }
 
     const body: Record<string, unknown> = {

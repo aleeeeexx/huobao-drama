@@ -9,12 +9,12 @@ import { getAbsolutePath } from '../utils/storage.js'
 import { downloadVideo, safeTaskError } from './video-download.js'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { compressReferenceImage, downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
+import { compressReferenceImage, downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image, saveCompressedReferenceFile } from '../utils/storage.js'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
-import { EDITS_FALLBACK_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isRetryableImageGatewayStatus, shouldFallbackFromImageEdits } from './image-gateway.js'
+import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isRetryableImageGatewayStatus, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
 
 type TaskType = 'image' | 'video'
 
@@ -251,7 +251,7 @@ async function processTask(id: number, config: AIConfig) {
 
     if (type === 'image') {
       const adapter = getImageAdapter(config.provider)
-      const resolvedReferenceImages = await normalizeReferenceImages(params.referenceImages)
+      const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
       ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
         id: record.id,
         model: record.model,
@@ -315,7 +315,7 @@ async function processTask(id: number, config: AIConfig) {
         logTaskWarn(label, 'gateway-retry', { id, status: resp.status, attempt })
         await new Promise(resolve => setTimeout(resolve, IMAGE_GATEWAY_RETRY_MS))
         const adapter = getImageAdapter(config.provider)
-        const resolvedReferenceImages = await normalizeReferenceImages(params.referenceImages)
+        const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
         ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
           id: record.id,
           model: record.model,
@@ -665,6 +665,75 @@ export async function resumeInterruptedTasks() {
 }
 
 // ─── 参考素材归一化 ───────────────────────────────────────────────
+
+const publishedGrokReferences = new Map<string, string>()
+
+function isGrokImageModel(model: string | null | undefined) {
+  return /grok|imagine/i.test(model || '')
+}
+
+function localStaticPath(value: string): string | null {
+  const raw = value.trim()
+  if (raw.startsWith('/static/')) return raw.slice(1)
+  if (raw.startsWith('static/')) return raw
+  return null
+}
+
+async function resolveImageReferences(model: string | null | undefined, refs: string[] | null | undefined): Promise<string[]> {
+  if (isGrokImageModel(model)) return normalizeGrokReferenceUrls(refs)
+  return normalizeReferenceImages(refs)
+}
+
+async function providerResultUrlForLocalImage(localPath: string): Promise<string | null> {
+  const [task] = await db.select().from(schema.sysTask)
+    .where(and(eq(schema.sysTask.type, 'image'), eq(schema.sysTask.localPath, localPath)))
+    .orderBy(desc(schema.sysTask.id))
+    .limit(1)
+  const url = (task?.resultUrl || '').trim()
+  return url.startsWith('https://') ? url : null
+}
+
+async function publishCompressedReference(localPath: string): Promise<string | null> {
+  const cached = publishedGrokReferences.get(localPath)
+  if (cached) return cached
+  const base = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '')
+  if (!base.startsWith('https://')) return null
+  const rel = await saveCompressedReferenceFile(localPath)
+  const url = `${base}/${rel}`
+  publishedGrokReferences.set(localPath, url)
+  return url
+}
+
+/** Grok edits 只提交 https。本地定妆优先用生成它的供应商地址，否则用公网压缩文件。 */
+async function normalizeGrokReferenceUrls(refs: string[] | null | undefined): Promise<string[]> {
+  if (!Array.isArray(refs) || !refs.length) return []
+  const deduped = Array.from(new Set(refs.map(item => String(item || '').trim()).filter(Boolean)))
+  const urls: string[] = []
+  for (const value of deduped) {
+    let providerResultUrl: string | null = null
+    let publicFileUrl: string | null = null
+    if (!value.startsWith('https://')) {
+      const localPath = localStaticPath(value)
+      if (localPath) {
+        try {
+          providerResultUrl = await providerResultUrlForLocalImage(localPath)
+          if (!providerResultUrl) publicFileUrl = await publishCompressedReference(localPath)
+        } catch (err) {
+          logTaskWarn('ImageTask', 'grok-reference-resolve-failed', { path: localPath, error: (err as Error).message })
+        }
+      }
+    }
+    const selected = selectGrokReferenceUrl({ reference: value, providerResultUrl, publicFileUrl })
+    if (!selected) {
+      logTaskWarn('ImageTask', 'grok-reference-skipped', { reason: 'no-https-url' })
+      continue
+    }
+    urls.push(selected)
+  }
+  if (!urls.length) logTaskWarn('ImageTask', 'grok-reference-urls', { message: GROK_REFERENCE_HTTPS_MESSAGE })
+  else logTaskProgress('ImageTask', 'grok-reference-urls', { count: urls.length, urls: urls.map(redactUrl) })
+  return urls
+}
 
 async function normalizeReferenceImages(refs: string[] | null | undefined): Promise<string[]> {
   if (!Array.isArray(refs) || !refs.length) return []
