@@ -3,8 +3,12 @@
  * 不访问数据库，方便单测。
  */
 
+import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
+
 export const RPG_STATE_SENTINEL = '<<<RPG_STATE>>>'
 const FREE_TEXT_MAX = 400
+const LIVE_ACTION_STILL = '单幅真人电影剧照，主体清晰，真实演员与实景，不要文字，不要水印，不要分镜格子，不要动漫，不要二次元，不要卡通，不要插画'
+const LIVE_ACTION_SHOT = '连续的真人电影镜头，真实演员表演，实景与电影摄影，不要动画，不要二次元，不要卡通，不要插画'
 
 export interface RpgChoice {
   id: string
@@ -189,26 +193,28 @@ export function formatScreenplayScene(
   return `## S${turnIndex} | ${interior} · ${location} | ${time}\n\n${action}${narrative.trim()}\n`
 }
 
-export function buildSceneImagePrompt(state: RpgWorldState, styleHint = ''): string {
+export function buildSceneImagePrompt(state: RpgWorldState): string {
   const people = state.characters
     .slice(0, 3)
     .map(character => `${character.name}（${character.appearance || character.role || '人物'}）`)
     .join('，')
   return [
-    styleHint,
+    LIVE_ACTION_CINEMATIC_STYLE.prompt,
     `场景：${state.scene.location}，${state.scene.time}`,
     state.scene.summary,
     state.scene.atmosphere ? `光线与氛围：${state.scene.atmosphere}` : '',
     people ? `画面中的人物：${people}` : '',
-    '单幅电影感插画，主体清晰，不要文字，不要水印，不要分镜格子',
+    LIVE_ACTION_STILL,
   ].filter(Boolean).join('\n')
 }
 
 export function buildSceneVideoPrompt(state: RpgWorldState, narrative: string): string {
   const motion = clip(state.scene.summary || narrative, 180)
   return [
-    `0-3秒：${state.scene.location}，${state.scene.atmosphere || '电影光'}，镜头缓慢推进，看清环境。`,
+    LIVE_ACTION_CINEMATIC_STYLE.prompt,
+    `0-3秒：${state.scene.location}，${state.scene.atmosphere || '自然电影光'}，实拍镜头缓慢推进，看清真实环境与人物。`,
     `3-6秒：${motion}`,
+    LIVE_ACTION_SHOT,
   ].join('\n')
 }
 

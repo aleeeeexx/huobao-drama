@@ -5,6 +5,7 @@
  * - 种子语句去掉 FROM DUAL（SQLite 非法），幂等语义（WHERE NOT EXISTS）保留
  */
 import type Database from 'better-sqlite3'
+import { LIVE_ACTION_CINEMATIC_STYLE } from '../services/live-action-cinematic.js'
 
 export const sqliteSchemaStatements = [
   `CREATE TABLE IF NOT EXISTS dramas (
@@ -391,6 +392,13 @@ export const stylePresetSeeds = [
     prompt: 'black and white manga illustration, high-contrast monochrome ink work, dynamic hatching and cross-hatching shading, bold solid blacks with dramatic negative space, screentone gray gradation, expressive confident ink linework, cinematic noir lighting, professional manga page quality, consistent character design across shots, strictly no color, avoid grayscale blur smudging, avoid painterly soft edges, avoid photorealism, avoid 3D render look',
     description: '黑白漫/ Noir 高对比墨水风',
   },
+  {
+    name: LIVE_ACTION_CINEMATIC_STYLE.name,
+    value: LIVE_ACTION_CINEMATIC_STYLE.value,
+    sortOrder: LIVE_ACTION_CINEMATIC_STYLE.sortOrder,
+    prompt: LIVE_ACTION_CINEMATIC_STYLE.prompt,
+    description: LIVE_ACTION_CINEMATIC_STYLE.description,
+  },
 ]
 
 /**
@@ -408,7 +416,7 @@ const LEGACY_SEED_PROMPTS: Record<string, string> = {
 /**
  * 已下架的种子预设 — 内容寻址删除：仅当库中行的 prompt 仍是种子原文
  * （未被用户编辑过）才删除；用户改过的同名行视为用户数据保留。
- * live（真人写实）：真人影像过不了平台真人内容审核，下架。
+ * live（旧 key）：只删除仍等于旧种子原文的行。织界使用另一条预设 live-action（真人电影）。
  */
 const REMOVED_SEED_PROMPTS: Record<string, string> = {
   live: 'ultra-realistic cinematic live-action look, professional film photography, natural skin tones with detailed pores and realistic texture, true human anatomy and proportions, shallow depth of field with creamy bokeh, cinematic three-point lighting, subtle film grain, 35mm lens cinematic framing, true-to-life color grading, detailed real-world environments, consistent actor appearance across shots, avoid cartoon or anime features, avoid 3D render look, avoid illustration style, avoid plastic waxy skin, avoid over-smoothing beauty filter',

@@ -4,12 +4,16 @@ import {
   NarrativeStreamParser,
   RPG_STATE_SENTINEL,
   buildSceneImagePrompt,
+  buildSceneVideoPrompt,
   emptyWorldState,
   formatScreenplayScene,
   parseStatePayload,
   resolvePlayerAction,
 } from '../src/services/rpg/turn.ts'
 import { OpenAIVideoAdapter } from '../src/services/adapters/openai-video.ts'
+import { LIVE_ACTION_CINEMATIC_STYLE } from '../src/services/live-action-cinematic.ts'
+import { PRESET_WORLDS } from '../src/services/rpg/worlds.ts'
+import { stylePresetSeeds } from '../src/db/sqlite-schema.ts'
 
 test('choice and free-text actions both resolve, and empty text does not', () => {
   const choices = [
@@ -67,9 +71,45 @@ test('screenplay and image prompt carry the current scene', () => {
   const screenplay = formatScreenplayScene(2, state, '你推开了门。', '推门进去')
   assert.match(screenplay, /## S2 \| 内景 · 雾隐茶寮 \| 子时/)
   assert.match(screenplay, /推门进去/)
-  const prompt = buildSceneImagePrompt(state, 'noir ink')
+  const prompt = buildSceneImagePrompt(state)
   assert.match(prompt, /雾隐茶寮/)
-  assert.match(prompt, /noir ink/)
+  assert.match(prompt, /冷青/)
+})
+
+test('play scene image and video prompts request live-action cinema', () => {
+  const state = emptyWorldState()
+  state.scene = { location: '雾隐茶寮', time: '子时', summary: '灯笼在雨里摇，一只灵狐穿过廊下', atmosphere: '冷青' }
+  state.characters = [{ name: '老板娘', role: '茶寮主人', status: '在柜台后', appearance: '四十岁，青衫，发髻' }]
+  const image = buildSceneImagePrompt(state)
+  const video = buildSceneVideoPrompt(state, '你推开了门。')
+  for (const prompt of [image, video]) {
+    assert.match(prompt, /真人电影/)
+    assert.match(prompt, /photorealistic live-action cinema/)
+    assert.match(prompt, /real human actors/)
+    assert.match(prompt, /shallow depth of field/)
+    assert.match(prompt, /naturalistic color grade/)
+    assert.match(prompt, /live-action movie visual effects/)
+    assert.match(prompt, /avoid anime/)
+    assert.match(prompt, /avoid 二次元/)
+    assert.match(prompt, /avoid cartoon/)
+    assert.match(prompt, /avoid illustration/)
+    assert.match(prompt, /avoid comic/)
+    assert.match(prompt, /avoid painterly fantasy art/)
+  }
+  assert.match(image, /老板娘/)
+  assert.match(image, /不要插画/)
+  assert.doesNotMatch(image, /电影感插画/)
+  assert.match(video, /0-3秒：雾隐茶寮/)
+  assert.match(video, /不要动画/)
+  assert.equal(image.startsWith(LIVE_ACTION_CINEMATIC_STYLE.prompt), true)
+  assert.equal(video.startsWith(LIVE_ACTION_CINEMATIC_STYLE.prompt), true)
+
+  const preset = stylePresetSeeds.find(item => item.value === LIVE_ACTION_CINEMATIC_STYLE.value)
+  assert.equal(preset?.name, '真人电影')
+  assert.equal(preset?.prompt, LIVE_ACTION_CINEMATIC_STYLE.prompt)
+  assert.ok(stylePresetSeeds.some(item => item.value === '3d' && item.prompt.includes('avoid 2D flat cel shading')))
+  assert.ok(stylePresetSeeds.some(item => item.value === 'anime' && item.prompt.includes('avoid photorealism')))
+  assert.equal(PRESET_WORLDS.every(world => world.style === LIVE_ACTION_CINEMATIC_STYLE.value), true)
 })
 
 test('grok video adapter reads request_id and done url', () => {
