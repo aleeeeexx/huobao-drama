@@ -3,17 +3,23 @@ import assert from 'node:assert/strict'
 import {
   NarrativeStreamParser,
   RPG_STATE_SENTINEL,
-  buildSceneImagePrompt,
-  buildSceneVideoPrompt,
+  assembleStillPrompt,
+  buildPlayRewriteMessage,
+  buildPlayStoryboardMessage,
+  choicesFromPayload,
   emptyWorldState,
   formatScreenplayScene,
-  parseStatePayload,
+  locationFromNarrativeHeader,
+  narrativeFromScreenplay,
+  projectWorldState,
   resolvePlayerAction,
+  stripChoiceTail,
 } from '../src/services/rpg/turn.ts'
 import { OpenAIVideoAdapter } from '../src/services/adapters/openai-video.ts'
 import { LIVE_ACTION_CINEMATIC_STYLE } from '../src/services/live-action-cinematic.ts'
 import { PRESET_WORLDS } from '../src/services/rpg/worlds.ts'
 import { stylePresetSeeds } from '../src/db/sqlite-schema.ts'
+import { prefixVideoStyle } from '../src/services/style-prompt.ts'
 
 test('choice and free-text actions both resolve, and empty text does not', () => {
   const choices = [
@@ -51,37 +57,64 @@ test('stream parser hides the state sentinel even when it is split across chunks
   const finished = parser.finish()
   assert.equal(finished.narrative, '雨下得更大。')
   assert.match(finished.stateRaw, /choices/)
-  const parsed = parseStatePayload(finished.stateRaw, emptyWorldState('雨'))
-  assert.equal(parsed.choices[0].label, '推门')
+  const choices = choicesFromPayload(finished.stateRaw)
+  assert.equal(choices[0].label, '推门')
 })
 
-test('missing state keeps the previous world and still offers choices', () => {
+test('dossier comes from studio assets, not a narrator state blob', () => {
   const previous = emptyWorldState('旧设定')
   previous.scene.location = '茶寮'
   previous.items = [{ name: '茶券', holder: '你', description: '半张' }]
-  const parsed = parseStatePayload('不是 json', previous)
-  assert.equal(parsed.state.scene.location, '茶寮')
-  assert.equal(parsed.state.items[0].name, '茶券')
-  assert.equal(parsed.choices.length, 3)
+  previous.quests = [{ title: '找到搭档', status: 'active', detail: '茶券还在' }]
+  const choices = choicesFromPayload('不是 json')
+  assert.equal(choices.length, 3)
+  const kept = projectWorldState(previous, { characters: [], scenes: [], props: [] })
+  assert.equal(kept.state.scene.location, '茶寮')
+  assert.equal(kept.state.items[0].name, '茶券')
+  assert.equal(kept.state.quests[0].title, '找到搭档')
+  const raw = JSON.stringify({
+    choices: [{ id: 'c1', label: '推门', detail: '进去' }, { id: 'c2', label: '看信', detail: '先不进' }],
+    characters: [{ name: '说书人捏造', role: '无', status: '无', appearance: '无' }],
+  })
+  assert.equal(choicesFromPayload(raw)[0].label, '推门')
+  const projected = projectWorldState(previous, {
+    characters: [{ name: '老板娘', role: '茶寮主人', description: '在柜台后', appearance: '四十岁，青衫', styling: '发髻' }],
+    scenes: [{ id: 7, location: '雾隐茶寮', time: '子时', prompt: '灯笼在雨里摇', lighting: '冷青', updatedAt: '2026-01-01' }],
+    props: [{ name: '茶券', type: '信物', description: '半张，写着你的名字' }],
+  }, 7)
+  assert.equal(projected.sceneId, 7)
+  assert.equal(projected.state.scene.location, '雾隐茶寮')
+  assert.equal(projected.state.characters[0].name, '老板娘')
+  assert.match(projected.state.characters[0].appearance, /发髻/)
+  assert.equal(projected.state.characters.some(item => item.name === '说书人捏造'), false)
+  assert.equal(projected.state.items[0].holder, '信物')
+  assert.equal(projected.state.quests[0].title, '找到搭档')
 })
 
-test('screenplay and image prompt carry the current scene', () => {
+test('screenplay scene can be read back as the player narrative', () => {
   const state = emptyWorldState()
   state.scene = { location: '雾隐茶寮', time: '子时', summary: '灯笼在雨里摇', atmosphere: '冷青' }
   const screenplay = formatScreenplayScene(2, state, '你推开了门。', '推门进去')
   assert.match(screenplay, /## S2 \| 内景 · 雾隐茶寮 \| 子时/)
   assert.match(screenplay, /推门进去/)
-  const prompt = buildSceneImagePrompt(state)
-  assert.match(prompt, /雾隐茶寮/)
-  assert.match(prompt, /冷青/)
+  const script = `${screenplay}\n${RPG_STATE_SENTINEL}\n{"choices":[]}`
+  assert.equal(narrativeFromScreenplay(stripChoiceTail(script), 2), '你推开了门。')
+  assert.deepEqual(locationFromNarrativeHeader(screenplay), { location: '雾隐茶寮', time: '子时' })
+  assert.equal(locationFromNarrativeHeader('你推开了门。'), null)
 })
 
-test('play scene image and video prompts request live-action cinema', () => {
-  const state = emptyWorldState()
-  state.scene = { location: '雾隐茶寮', time: '子时', summary: '灯笼在雨里摇，一只灵狐穿过廊下', atmosphere: '冷青' }
-  state.characters = [{ name: '老板娘', role: '茶寮主人', status: '在柜台后', appearance: '四十岁，青衫，发髻' }]
-  const image = buildSceneImagePrompt(state)
-  const video = buildSceneVideoPrompt(state, '你推开了门。')
+test('play still and video prompts keep the live-action cinema style', () => {
+  const image = assembleStillPrompt({
+    stylePrompt: LIVE_ACTION_CINEMATIC_STYLE.prompt,
+    sceneFinalPrompt: '',
+    location: '雾隐茶寮',
+    time: '子时',
+    scenePrompt: '灯笼在雨里摇',
+    lighting: '冷青',
+    characters: [{ name: '老板娘', appearance: '四十岁，青衫，发髻', role: '茶寮主人' }],
+    narrative: '你推开了门。',
+  })
+  const video = prefixVideoStyle(LIVE_ACTION_CINEMATIC_STYLE.prompt, '分镜视频提示词由 prompt_generator 写入')
   for (const prompt of [image, video]) {
     assert.match(prompt, /真人电影/)
     assert.match(prompt, /photorealistic live-action cinema/)
@@ -97,12 +130,24 @@ test('play scene image and video prompts request live-action cinema', () => {
     assert.match(prompt, /avoid painterly fantasy art/)
   }
   assert.match(image, /老板娘/)
+  assert.match(image, /雾隐茶寮/)
+  assert.match(image, /冷青/)
   assert.match(image, /不要插画/)
   assert.doesNotMatch(image, /电影感插画/)
-  assert.match(video, /0-3秒：雾隐茶寮/)
-  assert.match(video, /不要动画/)
   assert.equal(image.startsWith(LIVE_ACTION_CINEMATIC_STYLE.prompt), true)
   assert.equal(video.startsWith(LIVE_ACTION_CINEMATIC_STYLE.prompt), true)
+  const alreadyStyled = assembleStillPrompt({
+    stylePrompt: LIVE_ACTION_CINEMATIC_STYLE.prompt,
+    sceneFinalPrompt: `${LIVE_ACTION_CINEMATIC_STYLE.prompt}，\n空镜茶寮`,
+    location: '雾隐茶寮',
+    time: '子时',
+    scenePrompt: '灯笼',
+    lighting: '冷青',
+    characters: [],
+    narrative: '你推开了门。',
+  })
+  assert.equal(alreadyStyled.indexOf(LIVE_ACTION_CINEMATIC_STYLE.prompt), 0)
+  assert.equal(alreadyStyled.indexOf(LIVE_ACTION_CINEMATIC_STYLE.prompt, 1), -1)
 
   const preset = stylePresetSeeds.find(item => item.value === LIVE_ACTION_CINEMATIC_STYLE.value)
   assert.equal(preset?.name, '真人电影')
@@ -110,6 +155,32 @@ test('play scene image and video prompts request live-action cinema', () => {
   assert.ok(stylePresetSeeds.some(item => item.value === '3d' && item.prompt.includes('avoid 2D flat cel shading')))
   assert.ok(stylePresetSeeds.some(item => item.value === 'anime' && item.prompt.includes('avoid photorealism')))
   assert.equal(PRESET_WORLDS.every(world => world.style === LIVE_ACTION_CINEMATIC_STYLE.value), true)
+
+  const rewrite = buildPlayRewriteMessage({
+    worldTitle: '雾隐茶寮',
+    genre: '悬疑',
+    premise: '雨夜的茶寮。',
+    actionLine: '玩家选择了剧情走向：「推门进去」',
+    turnIndex: 2,
+    existingScript: '## S1 | 外景 · 巷口 | 夜',
+    recent: '第1幕\n你站在门外。',
+  })
+  assert.match(rewrite, /read_episode_script/)
+  assert.match(rewrite, /save_script/)
+  assert.match(rewrite, /script_rewriter|剧本改写/)
+  assert.doesNotMatch(rewrite, /chat\/completions/)
+  const storyboard = buildPlayStoryboardMessage({
+    turnIndex: 2,
+    narrative: '你推开了门。',
+    screenplay: '## S2 | 内景 · 雾隐茶寮 | 子时',
+    videoLabel: 'codecc (openai)',
+    characters: [{ id: 3, name: '老板娘' }],
+    scenes: [{ id: 7, location: '雾隐茶寮', time: '子时' }],
+    props: [],
+  })
+  assert.match(storyboard, /shot_number 必须是 2/)
+  assert.match(storyboard, /不要把 replace_existing 设为 true/)
+  assert.match(storyboard, /老板娘\(ID:3\)/)
 })
 
 test('grok video adapter reads request_id and done url', () => {

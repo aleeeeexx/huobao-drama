@@ -5,7 +5,7 @@ import { success, created, badRequest } from '../utils/response.js'
 import { generateImage, generateVideo, recoverVideoTask } from '../services/generation.js'
 import { safeTaskError } from '../services/video-download.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
-import { getDramaStylePrompt } from '../services/style-preset.js'
+import { getDramaStylePrompt, prefixVideoStyle } from '../services/style-preset.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -182,7 +182,7 @@ app.post('/', async (c) => {
     if (type === 'video' && String(videoPrompt || '').trim()) {
       const dramaId = body.drama_id ?? storyboardDramaId ?? null
       const stylePrompt = await getDramaStylePrompt(dramaId)
-      if (stylePrompt) videoPrompt = `${stylePrompt}，\n${videoPrompt}`
+      if (stylePrompt) videoPrompt = prefixVideoStyle(stylePrompt, videoPrompt)
     }
 
     const id = type === 'image'

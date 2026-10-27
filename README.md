@@ -130,11 +130,11 @@ Four built-in Mastra agents with database-backed configuration and Skill extensi
 
 ### 🎮 织界 / Playable RPG
 
-玩家首页是互动文字 RPG：选世界或自建世界，流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以生成插画和影像。<br>
-The player home is an interactive text RPG: pick or write a world, read the next scene as it streams, and continue either by **clicking a plot branch or typing a free-text action**. The current scene can become an illustration and a short video.
+织界是短剧制作台的玩家层，不是另一套创作栈。首页选世界，`/play/:id` 流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以「生成插画」和「生成影像」。右侧档案来自同一部短剧的角色、场景和道具。<br>
+Play mode rides the short-drama studio instead of a second creative stack. The home page picks a world, `/play/:id` streams the next scene, and the player continues by **clicking a branch or typing an action**. The illustration and video buttons stay. The dossier reads the same drama’s characters, scenes, and props.
 
-短剧制作台仍在 `/studio`。剧本改写、资产提取、分镜、提示词四个 Agent，以及图片/视频任务管线都保留；每一幕会写入背后的剧集，并异步交给 `script_rewriter`。<br>
-The short-drama studio remains at `/studio`. The four agents and the image/video task pipeline stay in place. Each scene is written into the backing episode and handed to `script_rewriter`.
+一局背后是一部 drama、一集 episode。续写用 `script_rewriter`（流式正文 + `save_script`），资产用 `extractor`，插画用 `prompt_generator` 的场景最终提示词再交图片任务，影像用 `storyboard_breaker` 只追加本幕分镜，缺视频提示词时再跑 `prompt_generator`，然后交视频任务。风格是「真人电影」，视频风格词与制作台一样在提交前注入。三条分支是改写结果上的玩家层封装，工作室没有独立分支表。制作台仍在 `/studio`。<br>
+Each play session is one drama and one episode. Continuation uses `script_rewriter` (streamed prose plus `save_script`), assets use `extractor`, illustrations use the scene final prompt from `prompt_generator` and then the image task, and video uses `storyboard_breaker` to append only that scene’s storyboard, then `prompt_generator` if the video prompt is missing, then the video task. The look is live-action cinema; the style prefix is applied at submit time, same as the studio. The three branches are player-layer glue on the rewrite — the studio has no branch table. The studio UI remains at `/studio`.
 
 ```bash
 cd backend && cp .env.example .env   # 填写 CODECC_API_KEY，不要提交
@@ -147,9 +147,9 @@ cd frontend && npm install && npm run dev
 |---|---|---|
 | `CODECC_API_KEY` | 空 / empty | 有值时启动写入 codecc 文本、图片、视频配置。只放 `backend/.env`<br>When set, startup upserts codecc text, image, and video configs. `backend/.env` only |
 | `CODECC_BASE_URL` | `https://codecc.cc` | 根地址，程序自行加 `/v1`<br>Root URL; the server appends `/v1` |
-| `CODECC_TEXT_MODEL` | `grok-4.7` | 叙事 / narration |
-| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 插画 / illustration |
-| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 影像 / scene video |
+| `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
 
 ### 🌐 多语言界面 / Multi-Language UI
 
@@ -198,9 +198,9 @@ No config files — everything is set via environment variables (all have defaul
 | `PUBLIC_BASE_URL` | — |Seedance 引用本地参考资源时所需的公网地址（服务器部署用）<br>Public URL Seedance needs to reference local assets (server deployments)|
 | `CODECC_API_KEY` | 空 / empty |织界玩家模式。见上文「织界」<br>Playable RPG mode. See “织界” above|
 | `CODECC_BASE_URL` | `https://codecc.cc` |codecc 根地址<br>codecc root URL|
-| `CODECC_TEXT_MODEL` | `grok-4.7` |叙事模型<br>Narration model|
-| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |场面插画<br>Scene illustration|
-| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |场面影像<br>Scene video|
+| `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
 
 > **说明**：制作台中的模型仍可在「设置」页维护。织界用 `backend/.env` 的 `CODECC_*` 在启动时写入配置，真实密钥不要进 git。<br>
 > **Note**: Studio models can still be edited on the Settings page. RPG mode writes `CODECC_*` from `backend/.env` at startup. Do not commit real keys.

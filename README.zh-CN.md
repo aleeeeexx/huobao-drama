@@ -88,15 +88,18 @@ data/       — 生成资源文件与 SQLite 数据库
 
 ### 🎮 织界：玩家向互动 RPG
 
-织界是给玩家用的一层。短剧制作台还在 `/studio`，四个 Agent（剧本改写、资产提取、分镜、提示词）和图片/视频任务管线都保留。
+织界是短剧制作台的玩家层，不是另一套创作栈。首页选世界、`/play/:id` 流式读下一幕、点选分支或写下自由行动、右侧档案，以及「生成插画」「生成影像」都还在。每一局背后是一部短剧（一部 drama、一集 episode）。制作台仍在 `/studio`。
 
-玩家流程：
+一回合怎么往下走：
 
-1. 打开首页，选择预设世界，或自己写一个世界设定。
-2. 说书人流式写下开场，并给出三条剧情走向。
-3. 点选一条走向，**或**在输入框写下自己的行动。两种方式都会推进下一幕。
-4. 右侧记下当前场景、人物、物品和事务。
-5. 对当前场面可以「生成插画」和「生成影像」。插画走现有图片任务，影像会先落一条分镜再走现有视频任务。每一幕正文会写入对应短剧的剧集，并异步交给 `script_rewriter` 续写成剧本。
+1. `script_rewriter` 读取本集正文，把给玩家看的下一幕流式写出来，并用 `save_script` 把格式化剧本存进这一集。三条剧情走向来自这次改写附带的结构化结果。工作室没有独立的分支表，这是玩家层唯一的薄封装。
+2. `extractor` 从剧本提取角色、场景、道具，去重后写入资产表。右侧档案读这些资产，不再靠单独的说书人世界状态。
+3. 「生成插画」调用 `prompt_generator` 为当前场景写最终提示词，再走图片任务。项目风格是「真人电影」，和风格预设是同一条。
+4. 「生成影像」调用 `storyboard_breaker` 只追加本幕分镜（不会清空更早的分镜）。还没有视频提示词时，再调用 `prompt_generator`，然后走视频任务。风格词在提交前注入，和制作台视频任务相同。
+
+`CODECC_*` 仍在启动时写入文本、图片、视频配置，四个 Agent 和织界共用这些配置。
+
+还没进工作室数据模型的部分：档案里的「事务」没有对应的短剧实体，暂时只沿用上一幕记下的条目；剧情分支只存在玩家回合上，不会出现在制作台。
 
 本地把 codecc 配进 `backend/.env`（从 `backend/.env.example` 复制，不要提交密钥）后启动，服务会写入三条 OpenAI 兼容配置。
 
@@ -116,9 +119,9 @@ cd frontend && npm install && npm run dev
 |---|---|---|
 | `CODECC_API_KEY` | 空 | 有值时启动写入文本/图片/视频配置 |
 | `CODECC_BASE_URL` | `https://codecc.cc` | 不带 `/v1`，程序自行拼接 |
-| `CODECC_TEXT_MODEL` | `grok-4.7` | 叙事模型 |
-| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 场面插画 |
-| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 场面影像 |
+| `CODECC_TEXT_MODEL` | `grok-4.7` | 文本 Agent，织界与制作台共用 |
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 图片任务，织界插画与制作台生图共用 |
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 视频任务，织界影像与制作台生视频共用 |
 
 ### 🌐 多语言界面
 
@@ -162,9 +165,9 @@ cd frontend && npm install && npm run dev
 | `PUBLIC_BASE_URL` | — | Seedance 引用本地参考资源时所需的公网地址（服务器部署用） |
 | `CODECC_API_KEY` | 空 | 织界：有值时启动写入 codecc 文本/图片/视频配置。只放在 `backend/.env` |
 | `CODECC_BASE_URL` | `https://codecc.cc` | codecc 根地址，不要自带 `/v1` |
-| `CODECC_TEXT_MODEL` | `grok-4.7` | 织界叙事模型 |
-| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 织界场面插画 |
-| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 织界场面影像 |
+| `CODECC_TEXT_MODEL` | `grok-4.7` | 文本 Agent 模型。织界续写、提取、分镜、提示词与制作台共用 |
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` | 图片任务模型，织界插画与制作台生图共用 |
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` | 视频任务模型，织界影像与制作台生视频共用 |
 
 > **说明**：制作台里的 AI 服务仍可在「设置」页维护。织界玩家模式优先读 `backend/.env` 的 `CODECC_*`，启动时写入数据库；不要把真实密钥提交到 git。
 

@@ -9,7 +9,7 @@ import { db, getInsertId, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
-import { getDramaId, getEpisodeId } from '../context.js'
+import { getDramaId, getEpisodeId, getStoryboardShotNumber } from '../context.js'
 
 async function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   await db.delete(schema.storyboardCharacters)
@@ -252,19 +252,29 @@ const saveStoryboards = createTool({
     replace_existing: z.boolean().optional(),
     storyboards: z.array(storyboardFields),
   }),
-  execute: async ({ storyboards, replace_existing }, context) => {
+  execute: async ({ storyboards: incoming, replace_existing }, context) => {
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
     const ts = now()
+    let storyboards = incoming
+    let replaceExisting = replace_existing === true
+    const onlyShot = getStoryboardShotNumber(context?.requestContext)
+    if (onlyShot) {
+      replaceExisting = false
+      storyboards = incoming.filter(item => item.shot_number === onlyShot)
+      if (!storyboards.length) {
+        return { error: `只允许保存分镜号 ${onlyShot}，不要清空或改写其他分镜` }
+      }
+    }
     logTaskProgress('StoryboardTool', 'save-begin', {
       episodeId,
       dramaId,
-      replaceExisting: replace_existing === true,
+      replaceExisting,
       count: storyboards.length,
       shotNumbers: storyboards.map(sb => sb.shot_number).join(','),
     })
-    if (replace_existing === true) {
+    if (replaceExisting) {
       const existingStoryboardRows = await db.select().from(schema.storyboards)
         .where(eq(schema.storyboards.episodeId, episodeId))
       for (const storyboardId of existingStoryboardRows.map(sb => sb.id)) {

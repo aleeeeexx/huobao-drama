@@ -5,6 +5,8 @@
 import { and, eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 
+export { prefixVideoStyle } from './style-prompt.js'
+
 /** 查询项目绑定的风格预设英文提示词片段；查不到返回 '' */
 export async function getDramaStylePrompt(dramaId: number | null | undefined): Promise<string> {
   if (!dramaId) return ''

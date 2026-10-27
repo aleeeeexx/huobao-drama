@@ -1,47 +1,43 @@
 /**
  * 织界对局编排。
- * 玩家看到的是流式叙事 + 选项/自由行动；每一幕同时写入短剧的 episode，
- * 并异步调用 script_rewriter 把正文续写成剧本。插画和视频走现有 sys_task 管线。
+ * 玩家看到的是流式叙事、分支和自由行动。创作本身走短剧工作室：
+ * script_rewriter 续写剧本，extractor 同步资产，插画用 prompt_generator 的场景提示词，
+ * 影像用 storyboard_breaker 追加本幕分镜，再由 prompt_generator 写视频提示词。
  */
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../../db/index.js'
-import { buildAgentRequestContext } from '../../agents/context.js'
-import { mastra } from '../../mastra/index.js'
-import { getTextConfig, getTextProviderBaseUrl } from '../ai.js'
 import { generateImage, generateVideo } from '../generation.js'
+import { EXTRACT_TARGETS, runExtraction } from '../extraction.js'
+import { getDramaStylePrompt, prefixVideoStyle } from '../style-preset.js'
+import { ensureSceneFinalPrompt } from '../final-prompt.js'
+import { videoModelLabel, writeStoryboardVideoPrompt } from '../video-prompts.js'
+import { runStudioAgent } from '../agent-runner.js'
 import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
 import { now } from '../../utils/response.js'
 import { PRESET_WORLDS, type WorldSeed } from './worlds.js'
 import {
-  buildSceneImagePrompt,
-  buildSceneVideoPrompt,
+  assembleStillPrompt,
+  buildPlayRewriteMessage,
+  buildPlayStoryboardMessage,
+  choicesFromPayload,
   describeAction,
   emptyWorldState,
   formatScreenplayScene,
+  locationFromNarrativeHeader,
+  narrativeFromScreenplay,
   NarrativeStreamParser,
-  parseStatePayload,
+  projectWorldState,
   resolvePlayerAction,
+  sceneIdFromScreenplay,
+  scriptHasScene,
+  stripChoiceTail,
+  visibleNarrative,
   type ResolvedAction,
   type RpgChoice,
   type RpgWorldState,
 } from './turn.js'
 
 const actingSessions = new Set<number>()
-
-const NARRATOR_SYSTEM = `你是互动文字 RPG「织界」的说书人。玩家每回合要么点选一个剧情走向，要么写下自己的行动，二者同等有效，都必须真正改变局面。
-
-输出格式（必须遵守）：
-1. 先写叙事正文：简体中文，第二人称「你」，280 到 420 字，一段或两段，有画面、有后果。不要分点，不要写「选项」，不要出现分隔符。
-2. 正文结束后另起一行，只输出一次分隔符 <<<RPG_STATE>>>
-3. 分隔符后输出一个 JSON 对象，不要使用 markdown 代码块。
-
-JSON 字段：
-- choices：恰好 3 个。id 为 c1、c2、c3。label 不超过 18 字，detail 不超过 36 字。三条方向必须不同，且都是玩家此刻做得成的事。
-- scene：location、time、summary（当前画面一两句）、atmosphere
-- characters：name、role、status（当前处境）、appearance。保留仍在场的人，不要无故删除。
-- items：name、holder、description。玩家还拿着的东西要留下。
-- quests：title、status（只能是 active、done、failed）、detail
-- memory：120 字以内的滚动摘要，供下一回合使用`
 
 export async function ensurePresetWorlds() {
   const ts = now()
@@ -176,18 +172,42 @@ export async function narrateSession(
 
   actingSessions.add(sessionId)
   try {
-    const previous = loaded.state
+    const turnIndex = loaded.turns.length + 1
     const actionLine = describeAction(resolved.action, loaded.latestChoices)
-    const messages = buildMessages(loaded.world, previous, loaded.recent, actionLine)
+    const episode = await readEpisode(loaded.session.episodeId)
     const parser = new NarrativeStreamParser()
-    for await (const delta of streamNarration(messages)) {
-      const visible = parser.push(delta)
-      if (visible) await onDelta(visible)
-    }
+    await runStudioAgent({
+      agentType: 'script_rewriter',
+      episodeId: loaded.session.episodeId,
+      dramaId: loaded.session.dramaId,
+      maxSteps: 10,
+      message: buildPlayRewriteMessage({
+        worldTitle: loaded.world.title,
+        genre: loaded.world.genre || '',
+        premise: loaded.world.premise,
+        actionLine,
+        turnIndex,
+        existingScript: episode?.scriptContent || '',
+        recent: loaded.recent,
+      }),
+      onTextDelta: async (delta) => {
+        const visible = parser.push(delta)
+        if (visible) await onDelta(visible)
+      },
+    })
     const finished = parser.finish()
-    if (!finished.narrative) throw new Error('说书人没有写出这一幕，请再试一次')
-    const parsed = parseStatePayload(finished.stateRaw, previous)
-    const turn = await persistTurn(loaded, resolved.action, finished.narrative, parsed.choices, parsed.state)
+    await commitScreenplay(loaded, turnIndex, resolved.action, finished.narrative)
+    const scriptEpisode = await readEpisode(loaded.session.episodeId)
+    const script = scriptEpisode?.scriptContent || ''
+    const narrative = visibleNarrative(finished.narrative) || narrativeFromScreenplay(script, turnIndex)
+    if (!narrative) throw new Error('这一幕没有写完，请再试一次')
+    await syncAssets(loaded.session.episodeId, loaded.session.dramaId)
+    const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
+    const preferredSceneId = sceneIdFromScreenplay(script, turnIndex, assets.scenes)
+    const projected = projectWorldState(loaded.state, assets, preferredSceneId)
+    const choices = choicesFromPayload(finished.stateRaw)
+    const turn = await persistTurn(loaded, resolved.action, narrative, choices, projected.state, projected.sceneId)
+    await appendManuscript(loaded.session.episodeId, turnIndex, resolved.action, narrative)
     return serializeTurn(turn)
   } finally {
     actingSessions.delete(sessionId)
@@ -204,15 +224,28 @@ export async function illustrateSession(sessionId: number) {
       return { task_id: turn.imageTaskId, status: task.status }
     }
   }
-  const sceneId = await ensureScene(loaded, turn)
-  const prompt = buildSceneImagePrompt(parseJson<RpgWorldState>(turn.worldState, loaded.state))
+  const state = parseJson<RpgWorldState>(turn.worldState, loaded.state)
+  const scene = await sceneForTurn(loaded, turn.sceneId)
+  const [sceneFinalPrompt, stylePrompt] = await Promise.all([
+    ensureSceneFinalPrompt(scene, loaded.session.episodeId, true),
+    getDramaStylePrompt(loaded.session.dramaId),
+  ])
+  const prompt = assembleStillPrompt({
+    stylePrompt,
+    sceneFinalPrompt,
+    location: scene.location,
+    time: scene.time || state.scene.time,
+    scenePrompt: scene.prompt || state.scene.summary,
+    lighting: scene.lighting || state.scene.atmosphere,
+    characters: state.characters,
+    narrative: turn.narrative,
+  })
   const taskId = await generateImage({
     dramaId: loaded.session.dramaId,
-    sceneId,
+    sceneId: scene.id,
     prompt,
-    size: '1024x1024',
   })
-  await db.update(schema.rpgTurns).set({ imageTaskId: taskId, sceneId }).where(eq(schema.rpgTurns.id, turn.id))
+  await db.update(schema.rpgTurns).set({ imageTaskId: taskId, sceneId: scene.id }).where(eq(schema.rpgTurns.id, turn.id))
   return { task_id: taskId, status: 'processing' }
 }
 
@@ -227,20 +260,85 @@ export async function filmSession(sessionId: number) {
     }
   }
   const state = parseJson<RpgWorldState>(turn.worldState, loaded.state)
-  const storyboardId = await ensureStoryboard(loaded, turn, state)
+  const storyboardId = await ensurePlayStoryboard(loaded, turn, state)
+  const [storyboard] = await db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId))
+  if (!storyboard) throw new Error('这一幕的分镜没有保存下来')
+  let videoPrompt = (storyboard.videoPrompt || '').trim()
+  if (!videoPrompt) {
+    videoPrompt = await writeStoryboardVideoPrompt(
+      loaded.session.episodeId,
+      loaded.session.dramaId,
+      storyboard,
+    )
+  }
+  if (!videoPrompt) throw new Error('这一幕的视频提示词没有写出来，请再试一次')
+  const stylePrompt = await getDramaStylePrompt(loaded.session.dramaId)
   const fresh = await refreshTurnMedia(turn)
   const taskId = await generateVideo({
     dramaId: loaded.session.dramaId,
     storyboardId,
-    prompt: buildSceneVideoPrompt(state, turn.narrative),
+    prompt: prefixVideoStyle(stylePrompt, videoPrompt),
     imageUrl: fresh.imageUrl || undefined,
     referenceMode: fresh.imageUrl ? 'first_frame' : 'reference',
-    duration: 6,
+    duration: storyboard.duration && storyboard.duration > 0 ? storyboard.duration : 6,
     aspectRatio: '16:9',
     resolution: '720p',
   })
   await db.update(schema.rpgTurns).set({ videoTaskId: taskId, storyboardId }).where(eq(schema.rpgTurns.id, turn.id))
   return { task_id: taskId, status: 'processing' }
+}
+
+async function commitScreenplay(
+  loaded: PlayContext,
+  turnIndex: number,
+  action: ResolvedAction,
+  narrative: string,
+) {
+  const episode = await readEpisode(loaded.session.episodeId)
+  if (!episode) return
+  let script = stripChoiceTail(episode.scriptContent || '')
+  const prose = visibleNarrative(narrative) || narrativeFromScreenplay(script, turnIndex)
+  if (prose && !scriptHasScene(script, turnIndex)) {
+    const header = locationFromNarrativeHeader(narrative)
+    const stateForScene = header
+      ? { ...loaded.state, scene: { ...loaded.state.scene, location: header.location, time: header.time } }
+      : loaded.state
+    const scene = formatScreenplayScene(
+      turnIndex,
+      stateForScene,
+      prose,
+      action.mode === 'opening' ? null : action.text,
+    )
+    script = `${script}${script ? '\n\n' : ''}${scene}`
+  }
+  if (script === (episode.scriptContent || '')) return
+  await db.update(schema.episodes).set({
+    scriptContent: script,
+    updatedAt: now(),
+  }).where(eq(schema.episodes.id, episode.id))
+}
+
+async function appendManuscript(episodeId: number, turnIndex: number, action: ResolvedAction, narrative: string) {
+  const episode = await readEpisode(episodeId)
+  if (!episode) return
+  const playerLine = action.mode === 'opening' ? '' : `\n玩家：${action.text}`
+  const content = `${episode.content || ''}\n\n【第${turnIndex}幕】${playerLine}\n${narrative}\n`
+  await db.update(schema.episodes).set({
+    content,
+    updatedAt: now(),
+  }).where(eq(schema.episodes.id, episodeId))
+}
+
+async function syncAssets(episodeId: number, dramaId: number) {
+  const results = await Promise.allSettled(
+    EXTRACT_TARGETS.map(target => runExtraction(episodeId, dramaId, target)),
+  )
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
+      console.error('[rpg] extractor', message)
+    }
+  }
 }
 
 async function persistTurn(
@@ -249,10 +347,10 @@ async function persistTurn(
   narrative: string,
   choices: RpgChoice[],
   state: RpgWorldState,
+  sceneId: number | null,
 ) {
   const ts = now()
   const turnIndex = loaded.turns.length + 1
-  const screenplay = formatScreenplayScene(turnIndex, state, narrative, action.mode === 'opening' ? null : action.text)
   const res = await db.insert(schema.rpgTurns).values({
     sessionId: loaded.session.id,
     turnIndex,
@@ -262,6 +360,7 @@ async function persistTurn(
     narrative,
     choices: JSON.stringify(choices),
     worldState: JSON.stringify(state),
+    sceneId,
     createdAt: ts,
   })
   const turnId = getInsertId(res)
@@ -270,147 +369,75 @@ async function persistTurn(
     turnCount: turnIndex,
     updatedAt: ts,
   }).where(eq(schema.rpgSessions.id, loaded.session.id))
-  await appendManuscript(loaded.session.episodeId, turnIndex, action, narrative, screenplay)
-  await syncDramaAssets(loaded, state)
-  queueArticleContinuation(loaded.session.episodeId, loaded.session.dramaId)
   const [turn] = await db.select().from(schema.rpgTurns).where(eq(schema.rpgTurns.id, turnId))
   return turn
 }
 
-async function appendManuscript(
-  episodeId: number,
-  turnIndex: number,
-  action: ResolvedAction,
-  narrative: string,
-  screenplay: string,
-) {
-  const [episode] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
-  if (!episode) return
-  const playerLine = action.mode === 'opening' ? '' : `\n玩家：${action.text}`
-  const content = `${episode.content || ''}\n\n【第${turnIndex}幕】${playerLine}\n${narrative}\n`
-  const scriptContent = `${episode.scriptContent || ''}${episode.scriptContent ? '\n\n' : ''}${screenplay}`
-  await db.update(schema.episodes).set({
-    content,
-    scriptContent,
-    updatedAt: now(),
-  }).where(eq(schema.episodes.id, episodeId))
-}
-
-function queueArticleContinuation(episodeId: number, dramaId: number) {
-  void (async () => {
-    const agent = mastra.getAgent('script_rewriter')
-    if (!agent) return
-    const requestContext = buildAgentRequestContext({ episodeId, dramaId })
-    await agent.generate(
-      [{
-        role: 'user',
-        content: '请读取当前集正文，把玩家已经经历的每一幕改写为格式化剧本，并调用 save_script 保存完整剧本。按幕的顺序保留情节，不要替玩家提前写结局。',
-      }],
-      { maxSteps: 8, requestContext },
-    )
-  })().catch(error => {
-    console.error('[rpg] script_rewriter', error instanceof Error ? error.message : error)
-  })
-}
-
-async function syncDramaAssets(loaded: PlayContext, state: RpgWorldState) {
-  const ts = now()
-  const dramaId = loaded.session.dramaId
-  const episodeId = loaded.session.episodeId
-  for (const character of state.characters) {
-    const rows = await db.select().from(schema.characters).where(eq(schema.characters.dramaId, dramaId))
-    const existing = rows.find(row => row.name === character.name && !row.deletedAt)
-    let characterId = existing?.id
-    if (existing) {
-      await db.update(schema.characters).set({
-        role: character.role || existing.role,
-        description: character.status || existing.description,
-        appearance: character.appearance || existing.appearance,
-        updatedAt: ts,
-      }).where(eq(schema.characters.id, existing.id))
-    } else {
-      const res = await db.insert(schema.characters).values({
-        dramaId,
-        name: character.name,
-        role: character.role,
-        description: character.status,
-        appearance: character.appearance,
-        createdAt: ts,
-        updatedAt: ts,
-      })
-      characterId = getInsertId(res)
-    }
-    if (characterId) await linkEpisodeCharacter(episodeId, characterId, ts)
+async function sceneForTurn(loaded: PlayContext, sceneId: number | null) {
+  if (sceneId) {
+    const [scene] = await db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId))
+    if (scene && !scene.deletedAt) return scene
   }
-
-  const sceneId = await upsertScene(dramaId, episodeId, state, ts)
-  await linkEpisodeScene(episodeId, sceneId, ts)
-
-  for (const item of state.items) {
-    const rows = await db.select().from(schema.props).where(eq(schema.props.dramaId, dramaId))
-    const existing = rows.find(row => row.name === item.name && !row.deletedAt)
-    let propId = existing?.id
-    if (existing) {
-      await db.update(schema.props).set({
-        description: item.description || existing.description,
-        updatedAt: ts,
-      }).where(eq(schema.props.id, existing.id))
-    } else {
-      const res = await db.insert(schema.props).values({
-        dramaId,
-        name: item.name,
-        type: '关键物品',
-        description: item.holder ? `${item.holder}持有。${item.description}` : item.description,
-        createdAt: ts,
-        updatedAt: ts,
-      })
-      propId = getInsertId(res)
-    }
-    if (propId) await linkEpisodeProp(episodeId, propId, ts)
-  }
-  return sceneId
+  const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
+  const latest = assets.scenes[assets.scenes.length - 1]
+  if (!latest) throw new Error('这一幕还没有场景资产。续写时会用提取 Agent 写入场景，请再试一次。')
+  return latest
 }
 
-async function ensureScene(loaded: PlayContext, turn: typeof schema.rpgTurns.$inferSelect) {
-  if (turn.sceneId) return turn.sceneId
-  const state = parseJson<RpgWorldState>(turn.worldState, loaded.state)
-  return upsertScene(loaded.session.dramaId, loaded.session.episodeId, state, now())
-}
-
-async function upsertScene(dramaId: number, episodeId: number, state: RpgWorldState, ts: string) {
-  const rows = await db.select().from(schema.scenes).where(eq(schema.scenes.dramaId, dramaId))
-  const existing = rows.find(row => row.location === state.scene.location && row.time === state.scene.time && !row.deletedAt)
-  const prompt = [state.scene.summary, state.scene.atmosphere].filter(Boolean).join('，') || state.scene.location
-  if (existing) {
-    await db.update(schema.scenes).set({
-      prompt,
-      lighting: state.scene.atmosphere || existing.lighting,
-      episodeId,
-      updatedAt: ts,
-    }).where(eq(schema.scenes.id, existing.id))
-    return existing.id
-  }
-  const res = await db.insert(schema.scenes).values({
-    dramaId,
-    episodeId,
-    location: state.scene.location || '未知地点',
-    time: state.scene.time || '此时',
-    prompt,
-    lighting: state.scene.atmosphere,
-    createdAt: ts,
-    updatedAt: ts,
-  })
-  return getInsertId(res)
-}
-
-async function ensureStoryboard(
+async function ensurePlayStoryboard(
   loaded: PlayContext,
   turn: typeof schema.rpgTurns.$inferSelect,
   state: RpgWorldState,
 ) {
   if (turn.storyboardId) return turn.storyboardId
+  const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
+  const episode = await readEpisode(loaded.session.episodeId)
+  const screenplay = scriptHasScene(episode?.scriptContent || '', turn.turnIndex)
+    ? narrativeBlock(episode?.scriptContent || '', turn.turnIndex)
+    : formatScreenplayScene(turn.turnIndex, state, turn.narrative, turn.playerText)
+  const videoLabel = await videoModelLabel(loaded.session.episodeId)
+  try {
+    await runStudioAgent({
+      agentType: 'storyboard_breaker',
+      episodeId: loaded.session.episodeId,
+      dramaId: loaded.session.dramaId,
+      maxSteps: 20,
+      storyboardShotNumber: turn.turnIndex,
+      message: buildPlayStoryboardMessage({
+        turnIndex: turn.turnIndex,
+        narrative: turn.narrative,
+        screenplay,
+        videoLabel,
+        characters: assets.characters.map(item => ({ id: item.id, name: item.name })),
+        scenes: assets.scenes.map(item => ({ id: item.id, location: item.location, time: item.time })),
+        props: assets.props.map(item => ({ id: item.id, name: item.name })),
+      }),
+    })
+  } catch (error) {
+    console.error('[rpg] storyboard_breaker', error instanceof Error ? error.message : error)
+  }
+  const boards = await db.select().from(schema.storyboards)
+    .where(eq(schema.storyboards.episodeId, loaded.session.episodeId))
+  const matched = boards.find(item => item.storyboardNumber === turn.turnIndex && !item.deletedAt)
+  const storyboardId = matched?.id || await insertFallbackStoryboard(loaded, turn, state, assets)
+  const sceneId = matched?.sceneId || turn.sceneId
+  await db.update(schema.rpgTurns).set({ storyboardId, sceneId }).where(eq(schema.rpgTurns.id, turn.id))
+  return storyboardId
+}
+
+function narrativeBlock(script: string, turnIndex: number) {
+  const match = script.match(new RegExp(`##\\s*S${turnIndex}\\b[\\s\\S]*?(?=\\n##\\s*S\\d+\\b|$)`))
+  return match?.[0]?.trim() || script
+}
+
+async function insertFallbackStoryboard(
+  loaded: PlayContext,
+  turn: typeof schema.rpgTurns.$inferSelect,
+  state: RpgWorldState,
+  assets: EpisodeAssets,
+) {
   const ts = now()
-  const sceneId = await ensureScene(loaded, turn)
+  const sceneId = turn.sceneId || assets.scenes.find(item => item.location === state.scene.location)?.id || assets.scenes[0]?.id || null
   const res = await db.insert(schema.storyboards).values({
     episodeId: loaded.session.episodeId,
     sceneId,
@@ -418,44 +445,45 @@ async function ensureStoryboard(
     title: state.scene.location,
     location: state.scene.location,
     time: state.scene.time,
-    description: turn.narrative,
+    description: `【镜头1】${turn.narrative}`,
     atmosphere: state.scene.atmosphere,
-    videoPrompt: buildSceneVideoPrompt(state, turn.narrative),
     duration: 6,
     status: 'pending',
     createdAt: ts,
     updatedAt: ts,
   })
   const storyboardId = getInsertId(res)
-  await db.update(schema.rpgTurns).set({ storyboardId, sceneId }).where(eq(schema.rpgTurns.id, turn.id))
+  for (const character of assets.characters) {
+    const [existing] = await db.select().from(schema.storyboardCharacters).where(and(
+      eq(schema.storyboardCharacters.storyboardId, storyboardId),
+      eq(schema.storyboardCharacters.characterId, character.id),
+    ))
+    if (existing) continue
+    await db.insert(schema.storyboardCharacters).values({
+      storyboardId,
+      characterId: character.id,
+    })
+  }
   return storyboardId
 }
 
-async function linkEpisodeCharacter(episodeId: number, characterId: number, ts: string) {
-  const [existing] = await db.select().from(schema.episodeCharacters).where(and(
-    eq(schema.episodeCharacters.episodeId, episodeId),
-    eq(schema.episodeCharacters.characterId, characterId),
-  ))
-  if (existing) return
-  await db.insert(schema.episodeCharacters).values({ episodeId, characterId, createdAt: ts })
-}
-
-async function linkEpisodeScene(episodeId: number, sceneId: number, ts: string) {
-  const [existing] = await db.select().from(schema.episodeScenes).where(and(
-    eq(schema.episodeScenes.episodeId, episodeId),
-    eq(schema.episodeScenes.sceneId, sceneId),
-  ))
-  if (existing) return
-  await db.insert(schema.episodeScenes).values({ episodeId, sceneId, createdAt: ts })
-}
-
-async function linkEpisodeProp(episodeId: number, propId: number, ts: string) {
-  const [existing] = await db.select().from(schema.episodeProps).where(and(
-    eq(schema.episodeProps.episodeId, episodeId),
-    eq(schema.episodeProps.propId, propId),
-  ))
-  if (existing) return
-  await db.insert(schema.episodeProps).values({ episodeId, propId, createdAt: ts })
+async function loadEpisodeAssets(dramaId: number, episodeId: number): Promise<EpisodeAssets> {
+  const characterLinks = await db.select().from(schema.episodeCharacters)
+    .where(eq(schema.episodeCharacters.episodeId, episodeId))
+  const sceneLinks = await db.select().from(schema.episodeScenes)
+    .where(eq(schema.episodeScenes.episodeId, episodeId))
+  const propLinks = await db.select().from(schema.episodeProps)
+    .where(eq(schema.episodeProps.episodeId, episodeId))
+  const characterIds = new Set(characterLinks.map(link => link.characterId))
+  const sceneIds = new Set(sceneLinks.map(link => link.sceneId))
+  const propIds = new Set(propLinks.map(link => link.propId))
+  const characters = (await db.select().from(schema.characters).where(eq(schema.characters.dramaId, dramaId)))
+    .filter(item => characterIds.has(item.id) && !item.deletedAt)
+  const scenes = (await db.select().from(schema.scenes).where(eq(schema.scenes.dramaId, dramaId)))
+    .filter(item => sceneIds.has(item.id) && !item.deletedAt)
+  const props = (await db.select().from(schema.props).where(eq(schema.props.dramaId, dramaId)))
+    .filter(item => propIds.has(item.id) && !item.deletedAt)
+  return { characters, scenes, props }
 }
 
 async function refreshTurnMedia(turn: typeof schema.rpgTurns.$inferSelect) {
@@ -480,6 +508,17 @@ async function refreshTurnMedia(turn: typeof schema.rpgTurns.$inferSelect) {
 async function readTask(id: number) {
   const [task] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, id))
   return task || null
+}
+
+async function readEpisode(episodeId: number) {
+  const [episode] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
+  return episode || null
+}
+
+interface EpisodeAssets {
+  characters: Array<typeof schema.characters.$inferSelect>
+  scenes: Array<typeof schema.scenes.$inferSelect>
+  props: Array<typeof schema.props.$inferSelect>
 }
 
 interface PlayContext {
@@ -514,99 +553,6 @@ async function loadPlay(sessionId: number): Promise<PlayContext> {
   }
 }
 
-function buildMessages(
-  world: typeof schema.rpgWorlds.$inferSelect,
-  state: RpgWorldState,
-  recent: string,
-  actionLine: string,
-) {
-  return [
-    { role: 'system', content: NARRATOR_SYSTEM },
-    {
-      role: 'user',
-      content: [
-        `世界：${world.title}`,
-        world.genre ? `类型：${world.genre}` : '',
-        `设定：${world.premise}`,
-        `当前状态：${JSON.stringify(state)}`,
-        recent ? `最近剧情：\n${recent}` : '',
-        actionLine,
-      ].filter(Boolean).join('\n\n'),
-    },
-  ]
-}
-
-async function* streamNarration(messages: Array<{ role: string; content: string }>): AsyncGenerator<string> {
-  const config = await getTextConfig()
-  const url = joinChatUrl(getTextProviderBaseUrl(config))
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      temperature: config.temperature ?? 0.85,
-      max_tokens: 4096,
-      stream: true,
-      thinking: { type: 'disabled' },
-      enable_thinking: false,
-    }),
-    signal: AbortSignal.timeout(180_000),
-  })
-  if (!response.ok || !response.body) {
-    const detail = await response.text().catch(() => '')
-    throw new Error(clipError(detail || `文本接口 ${response.status}`))
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let emitted = false
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const delta = readDelta(line)
-      if (!delta) continue
-      emitted = true
-      yield delta
-    }
-  }
-  const tail = readDelta(buffer)
-  if (tail) {
-    emitted = true
-    yield tail
-  }
-  if (!emitted) throw new Error('文本接口没有返回内容')
-}
-
-function joinChatUrl(baseUrl: string) {
-  return `${baseUrl.replace(/\/+$/, '')}/chat/completions`
-}
-
-function readDelta(line: string): string {
-  const trimmed = line.trim()
-  if (!trimmed.startsWith('data:')) return ''
-  const data = trimmed.slice(5).trim()
-  if (!data || data === '[DONE]') return ''
-  try {
-    const json = JSON.parse(data)
-    const content = json.choices?.[0]?.delta?.content
-    return typeof content === 'string' ? content : ''
-  } catch {
-    return ''
-  }
-}
-
-function clipError(message: string) {
-  return message.replace(/\bsk-[\w-]+/g, '[redacted]').slice(0, 280)
-}
-
 async function mustWorld(id: number) {
   const [world] = await db.select().from(schema.rpgWorlds).where(eq(schema.rpgWorlds.id, id))
   if (!world) throw new Error('世界不存在')
@@ -617,7 +563,7 @@ async function createCustomWorld(input: { title?: string; premise?: string; genr
   const title = String(input.title || '').trim()
   const premise = String(input.premise || '').trim()
   if (!title) throw new Error('给这个世界起个名字')
-  if (premise.length < 20) throw new Error('世界设定至少写 20 字，说书人才知道从哪写起')
+  if (premise.length < 20) throw new Error('世界设定至少写 20 字，才知道从哪一幕写起')
   if (premise.length > 2000) throw new Error('世界设定请控制在 2000 字以内')
   const ts = now()
   const seed: WorldSeed = {
