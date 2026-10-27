@@ -130,7 +130,7 @@ Four built-in Mastra agents with database-backed configuration and Skill extensi
 
 ### 🎮 织界 / Playable RPG
 
-织界是短剧制作台的玩家层，不是另一套创作栈。首页选世界，`/play/:id` 流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以「生成插画」和「生成影像」。右侧档案来自同一部短剧的角色、场景和道具。<br>
+织界是短剧制作台的玩家层，不是另一套创作栈。首页选世界，`/play/:id` 流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以「生成剧情图」和「生成影像」。右侧档案来自同一部短剧的角色、场景和道具。<br>
 Play mode rides the short-drama studio instead of a second creative stack. The home page picks a world, `/play/:id` streams the next scene, and the player continues by **clicking a branch or typing an action**. The illustration and video buttons stay. The dossier reads the same drama’s characters, scenes, and props.
 
 一局背后是一部 drama、一集 episode。续写用 `script_rewriter`（流式正文 + `save_script`），资产用 `extractor`，插画用 `prompt_generator` 的场景最终提示词再交图片任务，影像用 `storyboard_breaker` 只追加本幕分镜，缺视频提示词时再跑 `prompt_generator`，然后交视频任务。风格是「真人电影」，视频风格词与制作台一样在提交前注入。三条分支是改写结果上的玩家层封装，工作室没有独立分支表。制作台仍在 `/studio`。<br>

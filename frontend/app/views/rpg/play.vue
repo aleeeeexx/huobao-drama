@@ -23,7 +23,7 @@
       </div>
       <p v-if="latest?.image_error || latest?.video_error" class="media-error">{{ latest.image_error || latest.video_error }}</p>
       <figure v-if="latest?.image_url" class="still">
-        <img :src="latest.image_url" alt="这一幕的插画" />
+        <img :src="latest.image_url" alt="这一幕的剧情图" />
       </figure>
       <video v-if="latest?.video_url" class="clip" controls :src="latest.video_url"></video>
 
@@ -145,8 +145,8 @@ const state = computed(() => latest.value?.world_state || session.value?.world_s
   quests: [],
 })
 const imageLabel = computed(() => {
-  if (mediaBusy.value === 'image' || latest.value?.image_status === 'processing') return '插画绘制中'
-  return latest.value?.image_url ? '重画这一幕' : '生成插画'
+  if (mediaBusy.value === 'image' || latest.value?.image_status === 'processing') return '剧情图绘制中'
+  return latest.value?.image_url ? '重画这一幕' : '生成剧情图'
 })
 const videoLabel = computed(() => {
   if (mediaBusy.value === 'video' || latest.value?.video_status === 'processing') return '影像拍摄中'
@@ -280,7 +280,7 @@ async function illustrate() {
     await load()
     startPoll()
   } catch (error) {
-    toastError(error, { fallback: '插画没有画出来' })
+    toastError(error, { fallback: '剧情图没有画出来' })
   } finally {
     mediaBusy.value = ''
   }
