@@ -14,7 +14,7 @@ import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
-import { IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isRetryableImageGatewayStatus } from './image-gateway.js'
+import { EDITS_FALLBACK_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isRetryableImageGatewayStatus, shouldFallbackFromImageEdits } from './image-gateway.js'
 
 type TaskType = 'image' | 'video'
 
@@ -327,6 +327,30 @@ async function processTask(id: number, config: AIConfig) {
         resp = await postProvider(url, method, headers, body)
         if (!isRetryableImageGatewayStatus(resp.status)) break
       }
+    }
+
+    const hadReferences = Array.isArray(params.referenceImages) && params.referenceImages.length > 0
+    if (type === 'image' && shouldFallbackFromImageEdits(resp.status, params.frameType, hadReferences)) {
+      await resp.body?.cancel().catch(() => undefined)
+      logTaskWarn(label, 'edits-fallback', { id, status: resp.status, message: EDITS_FALLBACK_MESSAGE })
+      const adapter = getImageAdapter(config.provider)
+      ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
+        id: record.id,
+        model: record.model,
+        prompt: record.prompt,
+        size: params.size,
+        frameType: params.frameType,
+        referenceImages: null,
+      }))
+      logTaskProgress(label, 'request', {
+        id,
+        provider: config.provider,
+        method,
+        url: redactUrl(url),
+        model: record.model,
+        fallback: 'generations',
+      })
+      resp = await postProvider(url, method, headers, body)
     }
 
     // Firemux 在响应头提供内部任务编号；即使 JSON 响应体中断也能查询原任务。
