@@ -117,6 +117,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { rpgAPI } from '~/composables/useApi'
 import { toastError } from '~/composables/useToast'
+import { shareOpening } from '~/utils/rpg-opening'
 
 const route = useRoute()
 const sessionId = computed(() => Number(route.params.sessionId))
@@ -302,8 +303,10 @@ async function film() {
 onMounted(async () => {
   try {
     await load()
-    if (!session.value?.turns?.length) await act({ mode: 'opening' })
-    else if (needsMediaPoll()) startPoll()
+    if (!session.value?.turns?.length) {
+      await shareOpening(sessionId.value, () => act({ mode: 'opening' }))
+      if (!session.value?.turns?.length) await load()
+    } else if (needsMediaPoll()) startPoll()
   } catch (error) {
     toastError(error, { fallback: '这一局没有打开' })
   } finally {

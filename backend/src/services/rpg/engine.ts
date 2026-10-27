@@ -165,13 +165,15 @@ export async function narrateSession(
   body: { mode?: unknown; choice_id?: unknown; text?: unknown },
   onDelta: (text: string) => Promise<void> | void,
 ) {
+  // 占坑必须发生在 await 之前。两个开场请求若都先越过检查再等待读档,
+  // 会各跑一遍 Agent;失败时页面会连着弹出两次「这一幕没有写完」。
   if (actingSessions.has(sessionId)) throw new Error('这一幕还在书写，请稍候')
-  const loaded = await loadPlay(sessionId)
-  const resolved = resolvePlayerAction(body, loaded.latestChoices, loaded.turns.length > 0)
-  if (!resolved.ok) throw new Error(resolved.message)
-
   actingSessions.add(sessionId)
   try {
+    const loaded = await loadPlay(sessionId)
+    const resolved = resolvePlayerAction(body, loaded.latestChoices, loaded.turns.length > 0)
+    if (!resolved.ok) throw new Error(resolved.message)
+
     const turnIndex = loaded.turns.length + 1
     const actionLine = describeAction(resolved.action, loaded.latestChoices)
     const episode = await readEpisode(loaded.session.episodeId)
