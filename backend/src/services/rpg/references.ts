@@ -22,6 +22,13 @@ export interface VisualReference {
 
 export type AssetEnqueueDecision = 'use-existing' | 'reuse-task' | 'skip-failed' | 'enqueue'
 
+/** 绘制中的剧情图继续轮询。已完成的图只有玩家明确重画时才另开一张。 */
+export function reuseExistingStill(status: string | null | undefined, force: boolean): boolean {
+  if (status === 'processing') return true
+  if (status === 'completed' && !force) return true
+  return false
+}
+
 export function decideAssetEnqueue(input: {
   hasImage: boolean
   latestStatus: 'processing' | 'completed' | 'failed' | null

@@ -60,7 +60,9 @@ app.post('/sessions/:id/act', async (c) => {
 
 app.post('/sessions/:id/image', async (c) => {
   try {
-    return success(c, await illustrateSession(Number(c.req.param('id'))))
+    const body = await c.req.json().catch(() => ({}))
+    const force = body?.force === true || body?.redraw === true
+    return success(c, await illustrateSession(Number(c.req.param('id')), { force }))
   } catch (error) {
     return badRequest(c, error instanceof Error ? error.message : '剧情图生成失败')
   }

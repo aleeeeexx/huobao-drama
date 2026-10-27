@@ -16,6 +16,7 @@ import {
   buildStillReferences,
   PLAY_REFERENCE_WAIT_MS,
   PLAY_STILL_FRAME,
+  reuseExistingStill,
   selectPlayCharacters,
   selectPlayProps,
   stillPromptCharacters,
@@ -236,13 +237,13 @@ export async function narrateSession(
   }
 }
 
-export async function illustrateSession(sessionId: number) {
+export async function illustrateSession(sessionId: number, options?: { force?: boolean }) {
   const loaded = await loadPlay(sessionId)
   const turn = loaded.turns[loaded.turns.length - 1]
   if (!turn) throw new Error('还没有可以配图的场面')
   if (turn.imageTaskId) {
     const [task] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, turn.imageTaskId))
-    if (task?.status === 'processing' || task?.status === 'completed') {
+    if (task && reuseExistingStill(task.status, !!options?.force)) {
       return { task_id: turn.imageTaskId, status: task.status }
     }
   }

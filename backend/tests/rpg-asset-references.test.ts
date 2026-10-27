@@ -10,6 +10,7 @@ import {
   mentionedByName,
   PLAY_REFERENCE_WAIT_MS,
   PLAY_STILL_PROMPT_MARK,
+  reuseExistingStill,
   selectPlayCharacters,
   selectPlayProps,
   STILL_REFERENCE_LIMIT,
@@ -149,6 +150,15 @@ test('an existing reference image is not regenerated, and a failed plate is not 
   }), false)
 })
 
+test('redraw starts a new still, while an in-flight still keeps its task', () => {
+  assert.equal(reuseExistingStill('processing', true), true)
+  assert.equal(reuseExistingStill('processing', false), true)
+  assert.equal(reuseExistingStill('completed', false), true)
+  assert.equal(reuseExistingStill('completed', true), false)
+  assert.equal(reuseExistingStill('failed', true), false)
+  assert.equal(reuseExistingStill(null, true), false)
+})
+
 test('play stills borrow studio plates and do not write the composed frame back onto the scene', () => {
   const engine = readFileSync(new URL('../src/services/rpg/engine.ts', import.meta.url), 'utf8')
   const illustrate = engine.slice(
@@ -160,6 +170,8 @@ test('play stills borrow studio plates and do not write the composed frame back 
     engine.indexOf('async function commitScreenplay'),
   )
   assert.match(engine, /await syncAssets\([\s\S]*?scheduleEpisodeAssetImages/)
+  assert.match(illustrate, /reuseExistingStill\(task\.status, !!options\?\.force\)/)
+  assert.doesNotMatch(illustrate, /task\?\.status === 'processing' \|\| task\?\.status === 'completed'/)
   assert.match(illustrate, /resolveAssetReferenceImage|platesForTurn/)
   assert.match(illustrate, /frameType: PLAY_STILL_FRAME/)
   assert.match(illustrate, /referenceImages/)

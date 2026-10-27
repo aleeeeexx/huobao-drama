@@ -340,7 +340,8 @@ watch(sessionId, () => {
 async function illustrate() {
   mediaBusy.value = 'image'
   try {
-    await rpgAPI.illustrate(sessionId.value)
+    const redraw = !!latest.value?.image_url
+    await rpgAPI.illustrate(sessionId.value, redraw ? { force: true } : undefined)
     toast('正在对照定妆和场景图画这一幕')
     await load()
     startPoll()
