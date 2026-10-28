@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 const page = readFileSync(new URL('../app/views/rpg/play.vue', import.meta.url), 'utf8')
 const dossier = page.match(/<aside class="dossier">[\s\S]*?<\/aside>/)
 const turn = page.match(/<article v-for="turn in session\?\.turns \|\| \[\]"[\s\S]*?<\/article>/)
-const live = page.match(/<article v-if="acting" class="turn live">[\s\S]*?<\/article>/)
+const live = page.match(/<article v-if="acting" class="turn live"[^>]*>[\s\S]*?<\/article>/)
 
 test('each finished turn keeps its own still under the narrative, and the dossier does not', () => {
   assert.ok(dossier, 'dossier')
