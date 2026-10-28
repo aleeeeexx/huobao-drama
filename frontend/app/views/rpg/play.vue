@@ -109,7 +109,8 @@
     </aside>
 
     <section class="stage">
-      <div ref="logEl" class="log">
+      <div ref="logEl" class="log" @scroll.passive="onLogScroll">
+      <div ref="logBody" class="log-body">
       <p v-if="loading" class="waiting">正在推开这一局…</p>
       <article v-for="turn in session?.turns || []" :key="turn.id" class="turn">
         <p v-if="turn.player_mode === 'choice'" class="player-line">你选择了：{{ turn.player_text }}</p>
@@ -144,6 +145,7 @@
         <p v-if="pendingAction" class="player-line">{{ pendingAction }}</p>
         <p class="narrative">{{ draft }}<span class="caret"></span></p>
       </article>
+      </div>
       </div>
 
       <form v-if="latest && !loading" class="dock" @submit.prevent="sendFree">
@@ -217,6 +219,10 @@ const freeText = ref('')
 const pendingAction = ref('')
 const mediaBusy = ref<Record<string, true>>({})
 const logEl = ref<HTMLElement | null>(null)
+const logBody = ref<HTMLElement | null>(null)
+let stickToBottom = true
+let logResizeObserver: ResizeObserver | null = null
+let playDisposed = false
 const viewer = ref<{ src: string; alt: string; key: string } | null>(null)
 const viewerOpener = ref<HTMLButtonElement | null>(null)
 const stillCloseButton = ref<HTMLButtonElement | null>(null)
@@ -369,12 +375,34 @@ function stopPoll() {
   pollTimer = null
 }
 
-async function scrollLog() {
-  await nextTick()
-  if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
+const BOTTOM_STICK_GAP = 48
+
+function distanceFromBottom(log: HTMLElement) {
+  return log.scrollHeight - log.clientHeight - log.scrollTop
 }
 
-watch(draft, scrollLog)
+function pinLog() {
+  const log = logEl.value
+  if (!log) return
+  log.scrollTop = log.scrollHeight
+}
+
+async function scrollLog() {
+  await nextTick()
+  pinLog()
+  requestAnimationFrame(pinLog)
+}
+
+function onLogScroll() {
+  const log = logEl.value
+  if (!log) return
+  stickToBottom = distanceFromBottom(log) <= BOTTOM_STICK_GAP
+}
+
+watch(draft, () => {
+  stickToBottom = true
+  scrollLog()
+})
 
 async function act(body: { mode: string; choice_id?: string; text?: string }) {
   if (acting.value) return
@@ -544,23 +572,36 @@ onMounted(async () => {
       }
     }
     if (shouldPoll()) startPoll()
+    stickToBottom = true
+    await scrollLog()
   } catch (error) {
     toastError(error, { fallback: '这一局没有打开' })
   } finally {
     loading.value = false
+    await scrollLog()
+  }
+  if (!playDisposed && logBody.value) {
+    logResizeObserver = new ResizeObserver(() => {
+      if (stickToBottom) pinLog()
+    })
+    logResizeObserver.observe(logBody.value)
   }
 })
 
 onBeforeUnmount(() => {
+  playDisposed = true
   stopPoll()
+  logResizeObserver?.disconnect()
   window.removeEventListener('keydown', onStillViewerKeydown)
 })
 </script>
 
 <style scoped>
 .play {
+  flex: 1 1 auto;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   background:
@@ -568,8 +609,19 @@ onBeforeUnmount(() => {
     var(--surface-base);
 }
 .dossier, .stage { min-height: 0; min-width: 0; }
-.stage { display: flex; flex-direction: column; overflow: hidden; }
-.log { flex: 1; min-height: 0; overflow: auto; padding: 28px 8vw 16px; display: flex; flex-direction: column; gap: 22px; }
+.stage {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 28px 8vw 32px;
+}
+.log-body { display: flex; flex-direction: column; gap: 22px; }
 .dossier {
   padding: 22px 20px 28px;
   border-right: 1px solid var(--border);
@@ -708,7 +760,7 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-xl);
 }
 .waiting { color: var(--text-3); }
-.turn { max-width: 720px; }
+.turn { flex: none; max-width: 720px; }
 .turn .still, .turn .clip { max-width: 520px; }
 .player-line { color: var(--accent-text); font-size: 13px; margin-bottom: 8px; }
 .narrative {
@@ -727,9 +779,11 @@ onBeforeUnmount(() => {
   animation: blink 1s steps(1) infinite;
 }
 .dock {
-  flex-shrink: 0;
+  flex: none;
+  position: static;
+  z-index: 1;
   border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+  background: var(--surface-raised);
   padding: 12px 8vw 16px;
   display: flex;
   flex-direction: column;
@@ -771,7 +825,7 @@ onBeforeUnmount(() => {
 @media (max-width: 860px) {
   .play { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .dossier { max-height: 46vh; border-right: 0; border-bottom: 1px solid var(--border); }
-  .log { padding: 18px 16px 12px; }
+  .log { padding: 18px 16px 28px; }
   .dock { padding: 10px 16px 14px; }
   .choices { grid-template-columns: 1fr; }
   .free textarea { min-height: 44px; }
