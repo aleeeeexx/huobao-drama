@@ -6,6 +6,8 @@ import { assembleStillPrompt } from '../src/services/rpg/turn.ts'
 import {
   applyReferenceMarkers,
   buildStillReferences,
+  PLAY_STILL_REFERENCE_LIMIT,
+  prioritizeStillReferences,
   decideAssetEnqueue,
   isAssetReferenceTask,
   mentionedByName,
@@ -94,6 +96,33 @@ test('reference images stay in studio order and skip plates that are not ready',
     narrative: '你推开了门。',
   })
   assert.doesNotMatch(plain, /参考图顺序/)
+})
+
+test('play stills keep the scene plate and the lead, not the first two unrelated refs', () => {
+  const refs = prioritizeStillReferences({
+    scene: { name: '雾隐茶寮', imageUrl: 'static/images/scene.png' },
+    characters: [
+      { name: '林', role: '路人', imageUrl: 'static/images/extra.png' },
+      { name: '老板娘', role: '店主', imageUrl: 'static/images/host.png' },
+      { name: '你', role: '主角', imageUrl: 'static/images/you.png' },
+    ],
+    props: [{ name: '半张茶券', imageUrl: 'static/images/ticket.png' }],
+    limit: PLAY_STILL_REFERENCE_LIMIT,
+  })
+  assert.deepEqual(refs.map(item => item.name), ['雾隐茶寮', '你'])
+  assert.equal(refs[0].kind, 'scene')
+  assert.equal(refs[1].kind, 'character')
+
+  const withoutScene = prioritizeStillReferences({
+    characters: [
+      { name: '林', role: '路人', imageUrl: 'static/images/extra.png' },
+      { name: '老板娘', role: '店主', imageUrl: 'static/images/host.png' },
+      { name: '你', role: '主角', imageUrl: 'static/images/you.png' },
+    ],
+    props: [{ name: '半张茶券', imageUrl: 'static/images/ticket.png' }],
+  })
+  assert.deepEqual(withoutScene.map(item => item.name), ['你', '老板娘'])
+  assert.equal(PLAY_STILL_REFERENCE_LIMIT, 2)
 })
 
 test('video prompts tag @names with the same reference index as the studio', () => {
@@ -192,6 +221,7 @@ test('play stills borrow studio plates and do not write the composed frame back 
   assert.doesNotMatch(illustrate, /task\?\.status === 'processing' \|\| task\?\.status === 'completed'/)
   assert.match(illustrate, /resolveAssetReferenceImage|platesForTurn/)
   assert.match(illustrate, /frameType: PLAY_STILL_FRAME/)
+  assert.match(illustrate, /stillReferences/)
   assert.match(illustrate, /referenceImages/)
   const stillCall = illustrate.slice(
     illustrate.indexOf('const taskId = await generateImage'),

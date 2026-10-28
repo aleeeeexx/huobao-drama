@@ -3,7 +3,7 @@
  * 文生图: POST /v1/images/generations（JSON）。
  * GPT Image 参考图: POST /v1/images/edits，multipart 里重复字段名 image（不是 image[]）。
    * codecc 上的 Grok Imagine 不接受 multipart，edits 必须是 JSON：
- *   一张参考图用 image，多张用 images（最多 5 张），url 必须是 https，并带 response_format。
+ *   一张参考图用 image，多张用 images（codecc 上最多 2 张），url 必须是 https，并带 response_format。
  * 响应: { data: [{ url }] } 或 { data: [{ b64_json }] }。
  */
 import type {
@@ -17,7 +17,8 @@ import type {
 import { joinProviderUrl } from './url'
 import { parseDataUrl } from '../../utils/storage.js'
 
-const GROK_IMAGE_REFERENCE_LIMIT = 5
+/** codecc 上 grok-imagine-image-quality 的 edits：1～2 张 https 参考图返回 200，4 张返回 502。 */
+export const GROK_IMAGE_REFERENCE_LIMIT = 2
 
 export class OpenAIImageAdapter implements ImageProviderAdapter {
   provider = 'openai'

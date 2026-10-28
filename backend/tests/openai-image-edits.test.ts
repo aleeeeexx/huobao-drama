@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { OpenAIImageAdapter } from '../src/services/adapters/openai-image.ts'
+import { GROK_IMAGE_REFERENCE_LIMIT, OpenAIImageAdapter } from '../src/services/adapters/openai-image.ts'
 import {
   EDITS_FALLBACK_MESSAGE,
   officialXaiEditsTarget,
@@ -53,9 +53,9 @@ test('grok edits are JSON image or images, not multipart image[]', () => {
     referenceImages: httpsRefs(4),
   })
   assert.equal(four.body.image, undefined)
-  assert.equal(four.body.images.length, 4)
+  assert.equal(four.body.images.length, 2)
   assert.deepEqual(four.body.images[0], { type: 'image_url', url: plate(1) })
-  assert.deepEqual(four.body.images[3], { type: 'image_url', url: plate(4) })
+  assert.deepEqual(four.body.images[1], { type: 'image_url', url: plate(2) })
 
   const six = adapter.buildGenerateRequest(config, {
     id: 3,
@@ -64,9 +64,14 @@ test('grok edits are JSON image or images, not multipart image[]', () => {
     size: '1024x1024',
     referenceImages: httpsRefs(6),
   })
-  assert.equal(six.body.images.length, 5)
+  assert.equal(six.body.images.length, 2)
   assert.equal(six.body.aspect_ratio, '1:1')
   assert.equal(six.body.images[0].url, plate(1))
+  assert.equal(six.body.images[1].url, plate(2))
+  assert.equal(GROK_IMAGE_REFERENCE_LIMIT, 2)
+  const codecc = readFileSync(new URL('../src/services/codecc-config.ts', import.meta.url), 'utf8')
+  assert.match(codecc, /grok-imagine-image-quality/)
+  assert.doesNotMatch(codecc, /gpt-image-2\.5/)
 
   assert.throws(
     () => adapter.buildGenerateRequest(config, {

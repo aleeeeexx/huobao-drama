@@ -10,6 +10,8 @@ export const PLAY_REFERENCE_WAIT_MS = 180_000
 export const STILL_CHARACTER_LIMIT = 3
 export const STILL_PROP_LIMIT = 2
 export const STILL_REFERENCE_LIMIT = 6
+/** 剧情图交给 Grok edits 的张数。场景定妆优先，其次本幕主角和对手戏，道具只补空位。 */
+export const PLAY_STILL_REFERENCE_LIMIT = 2
 export const VIDEO_REFERENCE_LIMIT = 9
 
 export type ReferenceKind = 'scene' | 'character' | 'prop' | 'still'
@@ -144,6 +146,38 @@ export function stillPromptCharacters(
       role: asset.role || known?.role || '',
       appearance,
     }]
+  })
+}
+
+function characterPlateRank(item: { name?: string | null; role?: string | null }): number {
+  const name = (item.name || '').trim()
+  const role = item.role || ''
+  if (name === '你' || /主角/.test(name) || /主角/.test(role)) return 0
+  if (/路人|群众|龙套|背景/.test(role)) return 2
+  return 1
+}
+
+/**
+ * 剧情图参考图按重要性收束，而不是按传入数组的前几项截断。
+ * 场景定妆在最前；人物里主角优先，其次是本幕对手戏，路人靠后；道具只在还有空位时带上。
+ */
+export function prioritizeStillReferences(input: {
+  scene?: { name: string; imageUrl?: string | null } | null
+  characters?: Array<{ name: string; imageUrl?: string | null; role?: string | null }>
+  props?: Array<{ name: string; imageUrl?: string | null }>
+  extras?: Array<{ kind: ReferenceKind; name: string; imageUrl?: string | null }>
+  limit?: number
+}): VisualReference[] {
+  const characters = (input.characters || [])
+    .map((item, index) => ({ item, index, rank: characterPlateRank(item) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(entry => entry.item)
+  return buildStillReferences({
+    scene: input.scene,
+    characters,
+    props: input.props,
+    extras: input.extras,
+    limit: input.limit ?? PLAY_STILL_REFERENCE_LIMIT,
   })
 }
 

@@ -14,6 +14,9 @@ import { resolveAssetReferenceImage, scheduleEpisodeAssetImages } from '../asset
 import {
   applyReferenceMarkers,
   buildStillReferences,
+  PLAY_STILL_REFERENCE_LIMIT,
+  prioritizeStillReferences,
+  STILL_REFERENCE_LIMIT,
   PLAY_REFERENCE_WAIT_MS,
   PLAY_STILL_FRAME,
   reuseExistingStill,
@@ -262,9 +265,9 @@ export async function illustrateSession(sessionId: number, options?: { force?: b
     lighting: plates.scene.lighting || state.scene.atmosphere,
     characters: plates.promptCharacters,
     narrative,
-    references: plates.references,
+    references: plates.stillReferences,
   })
-  const referenceImages = plates.references.map(item => item.imageUrl)
+  const referenceImages = plates.stillReferences.map(item => item.imageUrl)
   const episode = await readEpisode(loaded.session.episodeId)
   // 剧情图不要写回 sceneId：writeBack 会把成片盖到场景空镜上，后面的镜头就锁不住同一个环境。
   const taskId = await generateImage({
@@ -465,15 +468,22 @@ async function platesForTurn(
     Promise.all(characters.map(item => resolveAssetReferenceImage('character', item.id, base))),
     Promise.all(props.map(item => resolveAssetReferenceImage('prop', item.id, base))),
   ])
-  const references = buildStillReferences({
+  const plateInput = {
     scene: scene ? { name: scene.location, imageUrl: scenePlate.imageUrl } : null,
-    characters: characters.map((item, index) => ({ name: item.name, imageUrl: characterPlates[index]?.imageUrl })),
+    characters: characters.map((item, index) => ({
+      name: item.name,
+      role: 'role' in item ? item.role : null,
+      imageUrl: characterPlates[index]?.imageUrl,
+    })),
     props: props.map((item, index) => ({ name: item.name, imageUrl: propPlates[index]?.imageUrl })),
-  })
+  }
+  const references = prioritizeStillReferences({ ...plateInput, limit: STILL_REFERENCE_LIMIT })
+  const stillReferences = prioritizeStillReferences({ ...plateInput, limit: PLAY_STILL_REFERENCE_LIMIT })
   return {
     scene,
     sceneFinalPrompt: scenePlate.finalPrompt,
     references,
+    stillReferences,
     promptCharacters: stillPromptCharacters(characters, state.characters),
   }
 }
