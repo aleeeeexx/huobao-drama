@@ -17,6 +17,7 @@ const { bootstrapCodeccConfigs } = await import('../src/services/codecc-config.t
 const {
   GRSAI_IMAGE_PRIORITY,
   GRSAI_OPTIONAL_PRIORITY,
+  GRSAI_VIDEO_PRIORITY,
   bootstrapGrsaiConfigs,
   readGrsaiEnv,
 } = await import('../src/services/grsai-config.ts')
@@ -99,6 +100,10 @@ test('startup upserts grsai-image above codecc and keeps text on codecc', async 
   assert.equal((await named('grsai-text')).length, 0)
   assert.equal((await named('grsai-video')).length, 0)
 
+  const activeVideo = await getActiveConfig('video')
+  assert.equal(activeVideo?.provider, 'openai')
+  assert.equal(activeVideo?.model, 'grok-imagine-video-1.5')
+
   const activeImage = await getActiveConfig('image')
   assert.equal(activeImage?.id, image.id)
   assert.equal(activeImage?.model, 'gpt-image-2.5')
@@ -112,7 +117,7 @@ test('startup upserts grsai-image above codecc and keeps text on codecc', async 
   assert.equal(codeccImage.isActive, true)
 })
 
-test('repeat startup updates the same row; optional text and video stay below codecc', async () => {
+test('repeat startup updates the same row; video becomes the active grsai channel and text stays below codecc', async () => {
   setEnv({
     CODECC_API_KEY: 'codecc-test-key',
     GRSAI_API_KEY: 'grsai-test-key-2',
@@ -135,6 +140,8 @@ test('repeat startup updates the same row; optional text and video stay below co
   assert.equal(images[0].isDefault, false)
   assert.equal((await getActiveConfig('image'))?.id, images[0].id)
 
+  assert.equal(images[0].provider, 'openai')
+
   const text = (await named('grsai-text'))[0]
   const video = (await named('grsai-video'))[0]
   assert.equal(text.serviceType, 'text')
@@ -145,19 +152,59 @@ test('repeat startup updates the same row; optional text and video stay below co
   assert.equal(text.isDefault, false)
   assert.equal(text.model, JSON.stringify(['grsai-text-model']))
   assert.equal(video.serviceType, 'video')
-  assert.equal(video.priority, GRSAI_OPTIONAL_PRIORITY)
+  assert.equal(video.provider, 'grsai')
+  assert.equal(video.baseUrl, 'https://example.grsai.test')
+  assert.equal(video.apiKey, 'grsai-test-key-2')
+  assert.equal(video.model, JSON.stringify(['grsai-video-model']))
+  assert.equal(video.priority, GRSAI_VIDEO_PRIORITY)
+  assert.equal(video.priority, 120)
+  assert.equal(video.priority > 100, true)
   assert.equal(video.isDefault, false)
   assert.equal(video.isActive, true)
   assert.equal((await named('grsai-text')).length, 1)
   assert.equal((await named('grsai-video')).length, 1)
 
   assert.equal((await getActiveConfig('text'))?.model, 'grok-4.7')
-  assert.equal((await getActiveConfig('video'))?.model, 'grok-imagine-video-1.5')
+  const activeVideo = await getActiveConfig('video')
+  assert.equal(activeVideo?.id, video.id)
+  assert.equal(activeVideo?.provider, 'grsai')
+  assert.equal(activeVideo?.model, 'grsai-video-model')
+  const codeccVideo = (await named('codecc-video'))[0]
+  assert.equal(codeccVideo.provider, 'openai')
+  assert.equal(codeccVideo.priority, 100)
+  assert.equal(codeccVideo.isActive, true)
+  assert.notEqual(activeVideo?.id, codeccVideo.id)
+
+  await db.update(schema.aiServiceConfigs)
+    .set({ provider: 'openai', priority: GRSAI_OPTIONAL_PRIORITY })
+    .where(eq(schema.aiServiceConfigs.id, video.id))
+  await bootstrapGrsaiConfigs()
+  const rewritten = (await named('grsai-video'))
+  assert.equal(rewritten.length, 1)
+  assert.equal(rewritten[0].id, video.id)
+  assert.equal(rewritten[0].provider, 'grsai')
+  assert.equal(rewritten[0].priority, GRSAI_VIDEO_PRIORITY)
+  assert.equal((await getActiveConfig('video'))?.provider, 'grsai')
 
   setEnv({ GRSAI_API_KEY: 'only-grsai', GRSAI_TEXT_MODEL: 'solo-text' })
   await db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.name, 'codecc-text'))
   await bootstrapGrsaiConfigs()
   assert.equal((await getActiveConfig('text'))?.model, 'solo-text')
+  const paused = (await named('grsai-video'))[0]
+  assert.equal(paused.isActive, false)
+  assert.equal(paused.provider, 'grsai')
+  assert.equal((await getActiveConfig('video'))?.provider, 'openai')
+  assert.equal((await getActiveConfig('video'))?.model, 'grok-imagine-video-1.5')
+
+  setEnv({ GRSAI_API_KEY: 'only-grsai', GRSAI_VIDEO_MODEL: 'minimax-h3' })
+  await bootstrapGrsaiConfigs()
+  const resumed = (await named('grsai-video'))[0]
+  assert.equal(resumed.id, paused.id)
+  assert.equal(resumed.isActive, true)
+  assert.equal(resumed.provider, 'grsai')
+  assert.equal(resumed.priority, GRSAI_VIDEO_PRIORITY)
+  assert.equal(resumed.model, JSON.stringify(['minimax-h3']))
+  assert.equal((await getActiveConfig('video'))?.model, 'minimax-h3')
 })
 
 test('server start calls grsai bootstrap next to codecc', () => {
