@@ -749,7 +749,7 @@ const serviceTypes = computed(() => [
   { type: 'image', label: t('common.serviceType.image') },
   { type: 'video', label: t('common.serviceType.video') },
 ])
-const providers = ['gemini', 'openai', 'volcengine', 'minimax', 'aliyun']
+const providers = ['gemini', 'openai', 'volcengine', 'minimax', 'aliyun', 'grsai']
 const providerSelectOptions = computed(() => providers.map(p => ({ label: p, value: p })))
 const serviceMeta = computed(() => ({
   text: { label: t('common.serviceType.text'), desc: t('settings.ai.meta.text') },
@@ -769,6 +769,7 @@ const providerPresets = {
     aliyun: { label: '阿里云百炼 Wan 3.0', baseUrl: 'https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com', models: ['wan3.0-video', 'wan3.0-video-prime'] },
     volcengine: { label: 'Seedance 2.0 官方', baseUrl: 'https://ark.cn-beijing.volces.com', models: ['doubao-seedance-2-0-mini-260615', 'doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128'] },
     minimax: { label: 'MiniMax H3 官方', baseUrl: 'https://api.minimaxi.com', models: ['MiniMax-H3'] },
+    grsai: { label: 'grsai MiniMax H3', baseUrl: 'https://grsaiapi.com', models: ['minimax-h3'] },
   },
 }
 const huobaoQuickConfigs = computed(() => {
@@ -1619,6 +1620,7 @@ onBeforeUnmount(stopUsagePoll)
 .provider-badge[data-provider="openai"] { background: #10a37f; }
 .provider-badge[data-provider="gemini"] { background: #4285f4; }
 .provider-badge[data-provider="volcengine"] { background: #ff5c39; }
+.provider-badge[data-provider="grsai"] { background: #5b4bff; }
 /* 有厂商图标时用中性底，彩色图标直接展示 */
 .provider-badge.has-icon { background: var(--bg-2); }
 .provider-badge-icon { width: 20px; height: 20px; object-fit: contain; }

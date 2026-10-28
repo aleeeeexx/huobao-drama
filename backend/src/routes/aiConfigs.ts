@@ -94,6 +94,16 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     }
   }
 
+  if (p === 'grsai') {
+    // 空请求体不是合法的 generate 载荷，只用来确认中转端点与鉴权是否可达。
+    return {
+      method: 'POST',
+      url: joinProviderUrl(baseUrl, '/v1', '/api/generate'),
+      headers: bearerHeaders(apiKey, true),
+      body: {},
+    }
+  }
+
   if (p === 'aliyun') {
     // Wan 3.0 仅支持异步提交；空请求体不会创建计费任务，仅用于验证地域端点与鉴权是否可达。
     return {

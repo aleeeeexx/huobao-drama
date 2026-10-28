@@ -150,11 +150,11 @@ cd frontend && npm install && npm run dev
 | `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
 | `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
 | `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
-| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 grsai 图片配置。只放 `backend/.env`<br>When set, startup upserts the grsai image config. `backend/.env` only |
-| `GRSAI_BASE_URL` | `https://grsaiapi.com` | 根地址，程序自行加 `/v1`<br>Root URL; the server appends `/v1` |
+| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 grsai 图片配置；视频模型有值时再写入视频配置。只放 `backend/.env`<br>When set, startup upserts the grsai image config, and the video config when a video model is set. `backend/.env` only |
+| `GRSAI_BASE_URL` | `https://grsaiapi.com` | 根地址。图片自行加 `/v1`；视频用 `/v1/api/generate` 与 `/v1/api/result`<br>Root URL. Images append `/v1`; video uses `/v1/api/generate` and `/v1/api/result` |
 | `GRSAI_IMAGE_MODEL` | `gpt-image-2.5` | 图片任务。优先级 120，高于 codecc，两边都启用时生图走 grsai<br>Image tasks. Priority 120, so image generation prefers grsai when codecc is also active |
 | `GRSAI_TEXT_MODEL` | 空 / empty | 有值才写入 `grsai-text`，优先级 90，不抢 codecc 文本<br>Writes `grsai-text` only when set, at priority 90, below codecc |
-| `GRSAI_VIDEO_MODEL` | 空 / empty | 有值才写入 `grsai-video`，优先级 90，不抢 codecc 视频<br>Writes `grsai-video` only when set, at priority 90, below codecc |
+| `GRSAI_VIDEO_MODEL` | 空 / empty | 有值才写入 `grsai-video`（推荐 `minimax-h3`）。provider 为 `grsai`，优先级 120，高于 codecc；清空后下次启动停用该行<br>Writes `grsai-video` only when set (recommended `minimax-h3`). Provider `grsai`, priority 120, above codecc. Clearing it deactivates that row on the next startup |
 
 ### 🌐 多语言界面 / Multi-Language UI
 
@@ -167,7 +167,7 @@ The interface ships in **中文 / English / 日本語 / 한국어**, with a glob
 |---|---|
 |**文本**<br>**Text**|OpenAI(兼容接口)、Gemini<br>OpenAI (compatible APIs), Gemini|
 |**图片**<br>**Image**|OpenAI、Gemini、火山引擎<br>OpenAI, Gemini, Volcano Engine|
-|**视频**<br>**Video**|火山引擎 Seedance 2.0(标准 / Fast / Mini)、MiniMax H3、阿里云百炼 Wan 3.0 (Prime / 标准)、OpenAI 兼容视频（codecc / Grok Imagine）<br>Volcano Engine Seedance 2.0 (Standard / Fast / Mini), MiniMax H3, Alibaba Bailian Wan 3.0 (Prime / Standard), OpenAI-compatible video (codecc / Grok Imagine)|
+|**视频**<br>**Video**|火山引擎 Seedance 2.0(标准 / Fast / Mini)、MiniMax H3、阿里云百炼 Wan 3.0 (Prime / 标准)、OpenAI 兼容视频（codecc / Grok Imagine）、grsai MiniMax H3（`minimax-h3`，`POST /v1/api/generate`）<br>Volcano Engine Seedance 2.0 (Standard / Fast / Mini), MiniMax H3, Alibaba Bailian Wan 3.0 (Prime / Standard), OpenAI-compatible video (codecc / Grok Imagine), grsai MiniMax H3 (`minimax-h3`, `POST /v1/api/generate`)|
 
 ---
 
@@ -206,14 +206,14 @@ No config files — everything is set via environment variables (all have defaul
 | `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
 | `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
 | `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
-| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 `grsai-image`。见上文「织界」<br>When set, startup upserts `grsai-image`. See “织界” above |
+| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 `grsai-image`；`GRSAI_VIDEO_MODEL` 有值时再写入 `grsai-video`。见上文「织界」<br>When set, startup upserts `grsai-image`, and `grsai-video` when `GRSAI_VIDEO_MODEL` is set. See “织界” above |
 | `GRSAI_BASE_URL` | `https://grsaiapi.com` | grsai 根地址，不要自带 `/v1`<br>grsai root URL; do not include `/v1` |
 | `GRSAI_IMAGE_MODEL` | `gpt-image-2.5` | 图片任务。优先级 120，高于 codecc<br>Image tasks. Priority 120, above codecc |
 | `GRSAI_TEXT_MODEL` | 空 / empty | 有值才写入 `grsai-text`（优先级 90）<br>Writes `grsai-text` only when set (priority 90) |
-| `GRSAI_VIDEO_MODEL` | 空 / empty | 有值才写入 `grsai-video`（优先级 90）<br>Writes `grsai-video` only when set (priority 90) |
+| `GRSAI_VIDEO_MODEL` | 空 / empty | 有值才写入 `grsai-video`（推荐 `minimax-h3`，provider `grsai`，优先级 120）<br>Writes `grsai-video` only when set (recommended `minimax-h3`, provider `grsai`, priority 120) |
 
-> **说明**：制作台中的模型仍可在「设置」页维护。`CODECC_*` 与 `GRSAI_*` 都在启动时从 `backend/.env` 写入数据库。grsai 图片优先级更高；文本和视频仍以 codecc 为准，除非到设置页调高优先级。真实密钥不要进 git。<br>
-> **Note**: Studio models can still be edited on the Settings page. Startup writes both `CODECC_*` and `GRSAI_*` from `backend/.env`. The grsai image config has higher priority; text and video stay on codecc unless their priority is raised in Settings. Do not commit real keys.
+> **说明**：制作台中的模型仍可在「设置」页维护。`CODECC_*` 与 `GRSAI_*` 都在启动时从 `backend/.env` 写入数据库。grsai 图片，以及设置了 `GRSAI_VIDEO_MODEL` 时的 grsai 视频，优先级都是 120，高于 codecc。文本仍以 codecc 为准，除非到设置页调高 `grsai-text` 的优先级。真实密钥不要进 git。<br>
+> **Note**: Studio models can still be edited on the Settings page. Startup writes both `CODECC_*` and `GRSAI_*` from `backend/.env`. The grsai image config, and the grsai video config when `GRSAI_VIDEO_MODEL` is set, use priority 120 and win over codecc. Text stays on codecc unless `grsai-text` is raised in Settings. Do not commit real keys.
 
 ### 📥 安装依赖 / Installation
 
