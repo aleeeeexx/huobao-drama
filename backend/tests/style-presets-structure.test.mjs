@@ -40,17 +40,16 @@ test('style presets route is mounted and implements CRUD', () => {
 test('drama style prompt is injected into image prompt composition', () => {
   const service = read('src/services/style-preset.ts')
   const gridTools = read('src/agents/tools/image-prompt-tools.ts')
-  const characters = read('src/routes/characters.ts')
-  const scenes = read('src/routes/scenes.ts')
+  const images = read('src/services/asset-images.ts')
 
   assert.match(service, /getDramaStylePrompt/)
   assert.match(service, /stylePresets\.value, drama\.style/)
   assert.match(gridTools, /getDramaStylePrompt\(dramaId\)/)
   // 保存最终提示词时由工具拼接项目视觉风格（风格片段置于最前方）
   assert.match(gridTools, /stylePrompt \? `\$\{stylePrompt\}, \$\{prompt\}` : prompt/)
-  assert.match(characters, /getDramaStylePrompt/)
-  assert.match(characters, /characterImagePrompt\(char, stylePrompt\)/)
-  assert.match(scenes, /getDramaStylePrompt\(scene\.dramaId\)/)
+  assert.match(images, /getDramaStylePrompt\(row\.dramaId\)/)
+  assert.match(images, /characterImagePrompt\(char, stylePrompt\)/)
+  assert.match(images, /sceneImagePrompt\(scene, stylePrompt\)/)
 })
 
 test('agent default prompts no longer hardcode consistent art style', () => {

@@ -3,9 +3,11 @@
  * 不访问数据库，方便单测。续写、提取、分镜和提示词不在这里调用模型。
  */
 
+import { PLAY_STILL_PROMPT_MARK, type ReferenceKind } from './references.js'
+
 export const RPG_STATE_SENTINEL = '<<<RPG_STATE>>>'
 const FREE_TEXT_MAX = 400
-const STILL_FRAME_NOTE = '单幅真人电影剧照，真实演员在实景中表演，主体清晰，不要文字，不要水印，不要分镜格子，不要动漫，不要二次元，不要卡通，不要插画'
+const STILL_FRAME_NOTE = `${PLAY_STILL_PROMPT_MARK}，真实演员在实景中表演，主体清晰，不要文字，不要水印，不要分镜格子，不要动漫，不要二次元，不要卡通，不要插画`
 
 export interface RpgChoice {
   id: string
@@ -650,6 +652,7 @@ export function assembleStillPrompt(input: {
   lighting: string
   characters: Array<{ name: string; appearance?: string; role?: string }>
   narrative: string
+  references?: Array<{ kind: ReferenceKind; name: string }>
 }): string {
   const style = input.stylePrompt.trim()
   const plate = input.sceneFinalPrompt.trim()
@@ -668,9 +671,21 @@ export function assembleStillPrompt(input: {
   return [
     head,
     STILL_FRAME_NOTE,
+    referenceCaption(input.references || []),
     people ? `画面中的人物：${people}` : '',
     input.narrative ? `这一幕：${clip(input.narrative, 180)}` : '',
   ].filter(Boolean).join('\n')
+}
+
+function referenceCaption(references: Array<{ kind: ReferenceKind; name: string }>): string {
+  const lines = references.flatMap((item, index) => {
+    const name = item.name.trim()
+    if (!name) return []
+    const label = item.kind === 'scene' ? '场景' : item.kind === 'prop' ? '道具' : item.kind === 'still' ? '剧情图' : '角色'
+    return [`${index + 1}. ${label}「${name}」`]
+  })
+  if (!lines.length) return ''
+  return `参考图顺序：${lines.join(' ')}。人物面容、服装与场景空间以对应参考图为准，保持同一张脸、同一套衣服、同一个地点。`
 }
 
 export function buildPlayRewriteMessage(input: {

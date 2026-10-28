@@ -9,11 +9,12 @@ import { getAbsolutePath } from '../utils/storage.js'
 import { downloadVideo, safeTaskError } from './video-download.js'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
+import { compressReferenceImage, downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image, saveCompressedReferenceFile } from '../utils/storage.js'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isOfficialXaiBase, isRetryableImageGatewayStatus, officialXaiEditsTarget, promptAfterEditsFallback, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
 
 type TaskType = 'image' | 'video'
 
@@ -213,6 +214,24 @@ function parseTaskParams(raw: string | null | undefined): Record<string, any> {
   }
 }
 
+function multipartSummary(body: FormData): string {
+  const parts: string[] = []
+  for (const [key, value] of body.entries()) {
+    parts.push(typeof value === 'string' ? key : `${key} ${value.type} ${value.size}B`)
+  }
+  return `[multipart/form-data: ${parts.join(', ')}]`
+}
+
+function postProvider(url: string, method: string, headers: Record<string, string>, body: unknown) {
+  const isMultipart = body instanceof FormData
+  return fetch(url, {
+    method,
+    headers,
+    body: isMultipart ? (body as FormData) : JSON.stringify(body),
+    signal: AbortSignal.timeout(600_000),
+  })
+}
+
 async function processTask(id: number, config: AIConfig) {
   try {
     const [record] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, id))
@@ -229,18 +248,13 @@ async function processTask(id: number, config: AIConfig) {
     })
 
     let url: string, method: string, headers: Record<string, string>, body: unknown
+    let usedOfficialXaiEdits = false
 
     if (type === 'image') {
-      const adapter = getImageAdapter(config.provider)
-      const resolvedReferenceImages = await normalizeReferenceImages(params.referenceImages)
-      ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
-        id: record.id,
-        model: record.model,
-        prompt: record.prompt,
-        size: params.size,
-        frameType: params.frameType,
-        referenceImages: resolvedReferenceImages.length ? JSON.stringify(resolvedReferenceImages) : null,
-      }))
+      const built = await buildImageProviderRequest(record, config, params, record.prompt)
+      usedOfficialXaiEdits = built.usedOfficialXaiEdits
+      if (usedOfficialXaiEdits) logTaskProgress(label, 'grok-edits-host', { id, host: 'api.x.ai' })
+      ;({ url, method, headers, body } = built)
     } else {
       const adapter = getVideoAdapter(config.provider)
       const resolvedImageUrl = await normalizeVideoReferenceUrl(params.imageUrl)
@@ -286,15 +300,51 @@ async function processTask(id: number, config: AIConfig) {
     logTaskPayload(label, 'request payload', {
       id, method, url, headers,
       // multipart 表单（如 OpenAI /v1/images/edits）无法 JSON 化，记录字段摘要
-      body: isMultipart ? `[multipart/form-data: ${[...(body as FormData).keys()].join(', ')}]` : body,
+      body: isMultipart ? multipartSummary(body as FormData) : body,
     })
 
-    const resp = await fetch(url, {
-      method,
-      headers,
-      body: isMultipart ? (body as FormData) : JSON.stringify(body),
-      signal: AbortSignal.timeout(600_000),
-    })
+    let resp = await postProvider(url, method, headers, body)
+    if (type === 'image' && isRetryableImageGatewayStatus(resp.status)) {
+      for (let attempt = 2; attempt <= IMAGE_GATEWAY_ATTEMPTS; attempt++) {
+        await resp.body?.cancel().catch(() => undefined)
+        logTaskWarn(label, 'gateway-retry', { id, status: resp.status, attempt })
+        await new Promise(resolve => setTimeout(resolve, IMAGE_GATEWAY_RETRY_MS))
+        const built = await buildImageProviderRequest(record, config, params, record.prompt)
+        usedOfficialXaiEdits = usedOfficialXaiEdits || built.usedOfficialXaiEdits
+        ;({ url, method, headers, body } = built)
+        resp = await postProvider(url, method, headers, body)
+        if (!isRetryableImageGatewayStatus(resp.status)) break
+      }
+    }
+
+    const hadReferences = Array.isArray(params.referenceImages) && params.referenceImages.length > 0
+    if (type === 'image' && shouldFallbackFromImageEdits(resp.status, params.frameType, hadReferences, usedOfficialXaiEdits)) {
+      await resp.body?.cancel().catch(() => undefined)
+      logTaskWarn(label, 'edits-fallback', {
+        id,
+        status: resp.status,
+        message: EDITS_FALLBACK_MESSAGE,
+        editsHost: safeHost(url),
+      })
+      const adapter = getImageAdapter(config.provider)
+      ;({ url, method, headers, body } = adapter.buildGenerateRequest(config, {
+        id: record.id,
+        model: record.model,
+        prompt: promptAfterEditsFallback(record.prompt),
+        size: params.size,
+        frameType: params.frameType,
+        referenceImages: null,
+      }))
+      logTaskProgress(label, 'request', {
+        id,
+        provider: config.provider,
+        method,
+        url: redactUrl(url),
+        model: record.model,
+        fallback: 'generations',
+      })
+      resp = await postProvider(url, method, headers, body)
+    }
 
     // Firemux 在响应头提供内部任务编号；即使 JSON 响应体中断也能查询原任务。
     const gatewayTaskId = resp.headers.get('X-Firemux-Task-Id') || resp.headers.get('X-Huobao-Task-Id')
@@ -303,7 +353,13 @@ async function processTask(id: number, config: AIConfig) {
       record.taskId = gatewayTaskId
     }
 
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    if (!resp.ok) {
+      if (type === 'image' && isRetryableImageGatewayStatus(resp.status)) {
+        await resp.body?.cancel().catch(() => undefined)
+        throw new Error(imageGatewayError(resp.status))
+      }
+      throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    }
     const result = await resp.json() as any
     logTaskPayload(label, 'response payload', { id, provider: config.provider, result })
 
@@ -603,6 +659,125 @@ export async function resumeInterruptedTasks() {
 
 // ─── 参考素材归一化 ───────────────────────────────────────────────
 
+const publishedGrokReferences = new Map<string, string>()
+
+function isGrokImageModel(model: string | null | undefined) {
+  return /grok|imagine/i.test(model || '')
+}
+
+function safeHost(rawUrl: string) {
+  try {
+    return new URL(rawUrl).hostname
+  } catch {
+    return ''
+  }
+}
+
+async function findOfficialXaiImageConfig(): Promise<{ baseUrl: string; apiKey: string } | null> {
+  const rows = await db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, 'image'))
+  const match = rows.find(row => row.isActive && row.apiKey.trim() && isOfficialXaiBase(row.baseUrl))
+  return match ? { baseUrl: match.baseUrl, apiKey: match.apiKey } : null
+}
+
+async function grokEditsConfig(config: AIConfig, model: string | null | undefined): Promise<AIConfig | null> {
+  if (!isGrokImageModel(model)) return null
+  const target = officialXaiEditsTarget({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    explicitApiKey: process.env.XAI_API_KEY,
+    explicitBaseUrl: process.env.XAI_BASE_URL,
+    storedOfficial: await findOfficialXaiImageConfig(),
+  })
+  if (!target) return null
+  return { ...config, baseUrl: target.baseUrl, apiKey: target.apiKey }
+}
+
+async function buildImageProviderRequest(
+  record: SysTaskRecord,
+  config: AIConfig,
+  params: Record<string, any>,
+  prompt: string | null | undefined,
+) {
+  const adapter = getImageAdapter(config.provider)
+  const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
+  const editsConfig = resolvedReferenceImages.length
+    ? await grokEditsConfig(config, record.model || config.model)
+    : null
+  const request = adapter.buildGenerateRequest(editsConfig ?? config, {
+    id: record.id,
+    model: record.model,
+    prompt,
+    size: params.size,
+    frameType: params.frameType,
+    referenceImages: resolvedReferenceImages.length ? JSON.stringify(resolvedReferenceImages) : null,
+  })
+  return { ...request, usedOfficialXaiEdits: !!editsConfig }
+}
+
+function localStaticPath(value: string): string | null {
+  const raw = value.trim()
+  if (raw.startsWith('/static/')) return raw.slice(1)
+  if (raw.startsWith('static/')) return raw
+  return null
+}
+
+async function resolveImageReferences(model: string | null | undefined, refs: string[] | null | undefined): Promise<string[]> {
+  if (isGrokImageModel(model)) return normalizeGrokReferenceUrls(refs)
+  return normalizeReferenceImages(refs)
+}
+
+async function providerResultUrlForLocalImage(localPath: string): Promise<string | null> {
+  const [task] = await db.select().from(schema.sysTask)
+    .where(and(eq(schema.sysTask.type, 'image'), eq(schema.sysTask.localPath, localPath)))
+    .orderBy(desc(schema.sysTask.id))
+    .limit(1)
+  const url = (task?.resultUrl || '').trim()
+  return url.startsWith('https://') ? url : null
+}
+
+async function publishCompressedReference(localPath: string): Promise<string | null> {
+  const cached = publishedGrokReferences.get(localPath)
+  if (cached) return cached
+  const base = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '')
+  if (!base.startsWith('https://')) return null
+  const rel = await saveCompressedReferenceFile(localPath)
+  const url = `${base}/${rel}`
+  publishedGrokReferences.set(localPath, url)
+  return url
+}
+
+/** Grok edits 只提交 https。本地定妆优先用生成它的供应商地址，否则用公网压缩文件。 */
+async function normalizeGrokReferenceUrls(refs: string[] | null | undefined): Promise<string[]> {
+  if (!Array.isArray(refs) || !refs.length) return []
+  const deduped = Array.from(new Set(refs.map(item => String(item || '').trim()).filter(Boolean)))
+  const urls: string[] = []
+  for (const value of deduped) {
+    let providerResultUrl: string | null = null
+    let publicFileUrl: string | null = null
+    if (!value.startsWith('https://')) {
+      const localPath = localStaticPath(value)
+      if (localPath) {
+        try {
+          providerResultUrl = await providerResultUrlForLocalImage(localPath)
+          if (!providerResultUrl) publicFileUrl = await publishCompressedReference(localPath)
+        } catch (err) {
+          logTaskWarn('ImageTask', 'grok-reference-resolve-failed', { path: localPath, error: (err as Error).message })
+        }
+      }
+    }
+    const selected = selectGrokReferenceUrl({ reference: value, providerResultUrl, publicFileUrl })
+    if (!selected) {
+      logTaskWarn('ImageTask', 'grok-reference-skipped', { reason: 'no-https-url' })
+      continue
+    }
+    urls.push(selected)
+  }
+  if (!urls.length) logTaskWarn('ImageTask', 'grok-reference-urls', { message: GROK_REFERENCE_HTTPS_MESSAGE })
+  else logTaskProgress('ImageTask', 'grok-reference-urls', { count: urls.length, urls: urls.map(redactUrl) })
+  return urls
+}
+
 async function normalizeReferenceImages(refs: string[] | null | undefined): Promise<string[]> {
   if (!Array.isArray(refs) || !refs.length) return []
 
@@ -615,15 +790,19 @@ async function normalizeReferenceImages(refs: string[] | null | undefined): Prom
   )
 
   const normalized = await Promise.all(deduped.map(async (value) => {
-    if (value.startsWith('data:image/')) return value
+    // data URL 也要再压一次。前面若已经塞进原图，这里不能原样上传。
+    if (value.startsWith('data:image/')) {
+      try {
+        return await compressReferenceImage(value)
+      } catch (err) {
+        logTaskWarn('ImageTask', 'reference-compress-failed', { error: (err as Error).message })
+        return null
+      }
+    }
     if (value.startsWith('static/') || value.startsWith('/static/')) {
       const localPath = value.startsWith('/static/') ? value.slice(1) : value
       try {
-        return await readImageAsCompressedDataUrl(localPath, {
-          maxWidth: 768,
-          maxHeight: 768,
-          quality: 68,
-        })
+        return await readImageAsCompressedDataUrl(localPath)
       } catch (err) {
         logTaskWarn('ImageTask', 'reference-read-failed', { path: localPath, error: (err as Error).message })
         return null
@@ -632,11 +811,7 @@ async function normalizeReferenceImages(refs: string[] | null | undefined): Prom
     // 远程 URL：下载压缩为 data URL，保证 multipart 上传（OpenAI edits）/ inline_data（Gemini）都可用
     if (/^https?:\/\//.test(value)) {
       try {
-        return await fetchImageAsCompressedDataUrl(value, {
-          maxWidth: 768,
-          maxHeight: 768,
-          quality: 68,
-        })
+        return await fetchImageAsCompressedDataUrl(value)
       } catch (err) {
         logTaskWarn('ImageTask', 'reference-fetch-failed', { url: value, error: (err as Error).message })
         return null

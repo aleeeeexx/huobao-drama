@@ -184,6 +184,6 @@ export const rpgAPI = {
   sessions: () => api.get('/rpg/sessions'),
   createSession: (data: any) => api.post('/rpg/sessions', data),
   session: (id: number) => api.get(`/rpg/sessions/${id}`),
-  illustrate: (id: number) => api.post(`/rpg/sessions/${id}/image`),
+  illustrate: (id: number, body?: { force?: boolean }) => api.post(`/rpg/sessions/${id}/image`, body),
   film: (id: number) => api.post(`/rpg/sessions/${id}/video`),
 }
