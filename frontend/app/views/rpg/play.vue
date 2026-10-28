@@ -111,7 +111,7 @@
     <section class="stage">
       <div ref="logEl" class="log" @scroll.passive="onLogScroll">
       <div ref="logBody" class="log-body">
-      <p v-if="loading" class="waiting">正在推开这一局…</p>
+      <p v-if="loading && !acting && !(session?.turns || []).length" class="waiting">正在推开这一局…</p>
       <article v-for="turn in session?.turns || []" :key="turn.id" class="turn">
         <p v-if="turn.player_mode === 'choice'" class="player-line">你选择了：{{ turn.player_text }}</p>
         <p v-else-if="turn.player_mode === 'free'" class="player-line">你写下：{{ turn.player_text }}</p>
@@ -141,9 +141,9 @@
           <video v-if="turn.video_url" class="clip" controls :src="turn.video_url"></video>
         </div>
       </article>
-      <article v-if="acting" class="turn live">
+      <article v-if="acting" class="turn live" aria-busy="true">
         <p v-if="pendingAction" class="player-line">{{ pendingAction }}</p>
-        <p class="narrative">{{ draft }}<span class="caret"></span></p>
+        <p class="waiting" role="status">正在书写这一幕…<span class="caret" aria-hidden="true"></span></p>
       </article>
       </div>
       </div>
@@ -214,7 +214,6 @@ const sessionId = computed(() => Number(route.params.sessionId))
 const session = ref<any>(null)
 const loading = ref(true)
 const acting = ref(false)
-const draft = ref('')
 const freeText = ref('')
 const pendingAction = ref('')
 const mediaBusy = ref<Record<string, true>>({})
@@ -399,15 +398,16 @@ function onLogScroll() {
   stickToBottom = distanceFromBottom(log) <= BOTTOM_STICK_GAP
 }
 
-watch(draft, () => {
-  stickToBottom = true
-  scrollLog()
-})
+function showPersistedSession(nextSession: any) {
+  session.value = nextSession
+  pendingAction.value = ''
+  acting.value = false
+}
 
 async function act(body: { mode: string; choice_id?: string; text?: string }) {
   if (acting.value) return
   acting.value = true
-  draft.value = ''
+  stickToBottom = true
   if (body.mode === 'choice') {
     const choice = choices.value.find((item: { id: string; label: string }) => item.id === body.choice_id)
     pendingAction.value = choice ? `你选择了：${choice.label}` : ''
@@ -416,6 +416,7 @@ async function act(body: { mode: string; choice_id?: string; text?: string }) {
   } else {
     pendingAction.value = ''
   }
+  scrollLog()
   try {
     const response = await fetch(`/api/v1/rpg/sessions/${sessionId.value}/act`, {
       method: 'POST',
@@ -430,6 +431,7 @@ async function act(body: { mode: string; choice_id?: string; text?: string }) {
     const decoder = new TextDecoder()
     let buffer = ''
     let failure = ''
+    // 流式片段和落库后的正文可能不一致，页面只展示已经写入的回合。
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -439,28 +441,29 @@ async function act(body: { mode: string; choice_id?: string; text?: string }) {
       for (const block of blocks) {
         const event = parseSse(block)
         if (!event) continue
-        if (event.event === 'delta') draft.value += event.data.text || ''
         if (event.event === 'error') failure = event.data.message || '这一幕没有写完'
       }
     }
     const tail = parseSse(buffer)
-    if (tail?.event === 'delta') draft.value += tail.data.text || ''
     if (tail?.event === 'error') failure = tail.data.message || failure
     if (failure) throw new Error(failure)
-    draft.value = ''
-    pendingAction.value = ''
+    const nextSession = await rpgAPI.session(sessionId.value)
     freeText.value = ''
-    await load()
+    showPersistedSession(nextSession)
     armPlatePoll()
     if (shouldPoll()) startPoll()
     await scrollLog()
   } catch (error) {
-    toastError(error, { fallback: '这一幕没有写完' })
-    await load().catch(() => {})
+    try {
+      toastError(error, { fallback: '这一幕没有写完' })
+      const nextSession = await rpgAPI.session(sessionId.value)
+      showPersistedSession(nextSession)
+    } catch {
+      pendingAction.value = ''
+      acting.value = false
+    }
     armPlatePoll()
     if (shouldPoll()) startPoll()
-  } finally {
-    acting.value = false
   }
 }
 
