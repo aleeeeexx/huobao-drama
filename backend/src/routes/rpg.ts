@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { badRequest, notFound, success } from '../utils/response.js'
+import { parseTurnId } from '../services/rpg/turn.js'
 import {
   createSession,
   filmSession,
@@ -62,7 +63,8 @@ app.post('/sessions/:id/image', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}))
     const force = body?.force === true || body?.redraw === true
-    return success(c, await illustrateSession(Number(c.req.param('id')), { force }))
+    const turnId = parseTurnId(body?.turn_id)
+    return success(c, await illustrateSession(Number(c.req.param('id')), { force, turnId }))
   } catch (error) {
     return badRequest(c, error instanceof Error ? error.message : '剧情图生成失败')
   }
@@ -70,7 +72,9 @@ app.post('/sessions/:id/image', async (c) => {
 
 app.post('/sessions/:id/video', async (c) => {
   try {
-    return success(c, await filmSession(Number(c.req.param('id'))))
+    const body = await c.req.json().catch(() => ({}))
+    const turnId = parseTurnId(body?.turn_id)
+    return success(c, await filmSession(Number(c.req.param('id')), { turnId }))
   } catch (error) {
     return badRequest(c, error instanceof Error ? error.message : '影像生成失败')
   }

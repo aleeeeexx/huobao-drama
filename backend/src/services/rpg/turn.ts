@@ -990,3 +990,67 @@ function clip(value: string, max: number): string {
   const trimmed = value.replace(/\s+/g, ' ').trim()
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed
 }
+
+/** 省略 turn_id 时回到最新一幕；指定了就必须是本局已有的回合。 */
+export function pickSessionTurn<T extends { id: number }>(
+  turns: readonly T[],
+  turnId?: number,
+): T | undefined {
+  if (turnId == null) return turns[turns.length - 1]
+  if (!Number.isInteger(turnId) || turnId <= 0) return undefined
+  return turns.find(turn => turn.id === turnId)
+}
+
+export function parseTurnId(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined
+  const turnId = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(turnId) || turnId <= 0) throw new Error('这一幕不在这局游戏里')
+  return turnId
+}
+
+export function publicAssetPath(value: string | null | undefined) {
+  if (!value) return null
+  if (/^https?:\/\//.test(value)) return value
+  return `/${value.replace(/^\/+/, '')}`
+}
+
+export interface PlayAssetPlate {
+  id: number
+  name?: string | null
+  location?: string | null
+  time?: string | null
+  imageUrl?: string | null
+  localPath?: string | null
+}
+
+function plateImagePath(imageUrl?: string | null, localPath?: string | null) {
+  const image = (imageUrl || '').trim()
+  if (image) return publicAssetPath(image)
+  const local = (localPath || '').trim()
+  return publicAssetPath(local)
+}
+
+export function serializePlayAssets(assets: {
+  characters: PlayAssetPlate[]
+  scenes: PlayAssetPlate[]
+  props: PlayAssetPlate[]
+}) {
+  return {
+    characters: assets.characters.map(item => ({
+      id: item.id,
+      name: item.name || '',
+      image_url: plateImagePath(item.imageUrl, item.localPath),
+    })),
+    scenes: assets.scenes.map(item => ({
+      id: item.id,
+      location: item.location || item.name || '',
+      time: item.time || '',
+      image_url: plateImagePath(item.imageUrl, item.localPath),
+    })),
+    props: assets.props.map(item => ({
+      id: item.id,
+      name: item.name || '',
+      image_url: plateImagePath(item.imageUrl, item.localPath),
+    })),
+  }
+}

@@ -41,10 +41,13 @@ import {
   narrativeFromScreenplay,
   NarrativeStreamParser,
   projectWorldState,
+  pickSessionTurn,
+  publicAssetPath,
   resolvePlayerAction,
   resolvePlayChoices,
   sceneIdFromScreenplay,
   scriptHasScene,
+  serializePlayAssets,
   stripChoiceTail,
   stripPipelineMeta,
   visibleNarrative,
@@ -162,6 +165,7 @@ export async function getSession(sessionId: number) {
     .orderBy(asc(schema.rpgTurns.turnIndex))
   const refreshed = []
   for (const turn of turns) refreshed.push(await refreshTurnMedia(turn))
+  const assets = await loadEpisodeAssets(session.dramaId, session.episodeId)
   return {
     id: session.id,
     title: session.title,
@@ -171,6 +175,7 @@ export async function getSession(sessionId: number) {
     turn_count: session.turnCount || 0,
     world: world ? serializeWorld(world) : null,
     world_state: parseJson<RpgWorldState>(session.worldState, emptyWorldState()),
+    assets: serializePlayAssets(assets),
     turns: refreshed.map(serializeTurn),
     acting: actingSessions.has(sessionId),
   }
@@ -240,10 +245,9 @@ export async function narrateSession(
   }
 }
 
-export async function illustrateSession(sessionId: number, options?: { force?: boolean }) {
+export async function illustrateSession(sessionId: number, options?: { force?: boolean; turnId?: number }) {
   const loaded = await loadPlay(sessionId)
-  const turn = loaded.turns[loaded.turns.length - 1]
-  if (!turn) throw new Error('还没有可以配图的场面')
+  const turn = turnForMedia(loaded, options?.turnId, '还没有可以配图的场面')
   if (turn.imageTaskId) {
     const [task] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, turn.imageTaskId))
     if (task && reuseExistingStill(task.status, !!options?.force)) {
@@ -281,10 +285,9 @@ export async function illustrateSession(sessionId: number, options?: { force?: b
   return { task_id: taskId, status: 'processing' }
 }
 
-export async function filmSession(sessionId: number) {
+export async function filmSession(sessionId: number, options?: { turnId?: number }) {
   const loaded = await loadPlay(sessionId)
-  const turn = loaded.turns[loaded.turns.length - 1]
-  if (!turn) throw new Error('还没有可以生成影像的场面')
+  const turn = turnForMedia(loaded, options?.turnId, '还没有可以生成影像的场面')
   if (turn.videoTaskId) {
     const [task] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, turn.videoTaskId))
     if (task?.status === 'processing' || task?.status === 'completed') {
@@ -663,6 +666,12 @@ interface PlayContext {
   recent: string
 }
 
+function turnForMedia(loaded: PlayContext, turnId: number | undefined, emptyMessage: string) {
+  const turn = pickSessionTurn(loaded.turns, turnId)
+  if (turn) return turn
+  throw new Error(turnId == null ? emptyMessage : '这一幕不在这局游戏里')
+}
+
 async function loadPlay(sessionId: number): Promise<PlayContext> {
   const [session] = await db.select().from(schema.rpgSessions).where(eq(schema.rpgSessions.id, sessionId))
   if (!session) throw new Error('这局游戏不存在')
@@ -753,12 +762,6 @@ function serializeTurn(turn: typeof schema.rpgTurns.$inferSelect & {
     image_error: turn.imageTask?.status === 'failed' ? turn.imageTask.errorMsg : null,
     video_error: turn.videoTask?.status === 'failed' ? turn.videoTask.errorMsg : null,
   }
-}
-
-function publicAssetPath(value: string | null | undefined) {
-  if (!value) return null
-  if (/^https?:\/\//.test(value)) return value
-  return `/${value.replace(/^\/+/, '')}`
 }
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
