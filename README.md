@@ -137,7 +137,7 @@ Play mode rides the short-drama studio instead of a second creative stack. The h
 Each play session is one drama and one episode. Continuation uses `script_rewriter` (streamed prose plus `save_script`), assets use `extractor`, illustrations use the scene final prompt from `prompt_generator` and then the image task, and video uses `storyboard_breaker` to append only that scene’s storyboard, then `prompt_generator` if the video prompt is missing, then the video task. The look is live-action cinema; the style prefix is applied at submit time, same as the studio. The three branches are player-layer glue on the rewrite — the studio has no branch table. The studio UI remains at `/studio`.
 
 ```bash
-cd backend && cp .env.example .env   # 填写 CODECC_API_KEY，不要提交
+cd backend && cp .env.example .env   # 填写 CODECC_API_KEY 或 GRSAI_API_KEY，不要提交
 cd backend && npm install && npm run dev
 cd frontend && npm install && npm run dev
 # 玩家 http://localhost:3013    制作台 http://localhost:3013/studio
@@ -150,6 +150,11 @@ cd frontend && npm install && npm run dev
 | `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
 | `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
 | `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
+| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 grsai 图片配置。只放 `backend/.env`<br>When set, startup upserts the grsai image config. `backend/.env` only |
+| `GRSAI_BASE_URL` | `https://grsaiapi.com` | 根地址，程序自行加 `/v1`<br>Root URL; the server appends `/v1` |
+| `GRSAI_IMAGE_MODEL` | `gpt-image-2.5` | 图片任务。优先级 120，高于 codecc，两边都启用时生图走 grsai<br>Image tasks. Priority 120, so image generation prefers grsai when codecc is also active |
+| `GRSAI_TEXT_MODEL` | 空 / empty | 有值才写入 `grsai-text`，优先级 90，不抢 codecc 文本<br>Writes `grsai-text` only when set, at priority 90, below codecc |
+| `GRSAI_VIDEO_MODEL` | 空 / empty | 有值才写入 `grsai-video`，优先级 90，不抢 codecc 视频<br>Writes `grsai-video` only when set, at priority 90, below codecc |
 
 ### 🌐 多语言界面 / Multi-Language UI
 
@@ -201,9 +206,14 @@ No config files — everything is set via environment variables (all have defaul
 | `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
 | `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
 | `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
+| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 `grsai-image`。见上文「织界」<br>When set, startup upserts `grsai-image`. See “织界” above |
+| `GRSAI_BASE_URL` | `https://grsaiapi.com` | grsai 根地址，不要自带 `/v1`<br>grsai root URL; do not include `/v1` |
+| `GRSAI_IMAGE_MODEL` | `gpt-image-2.5` | 图片任务。优先级 120，高于 codecc<br>Image tasks. Priority 120, above codecc |
+| `GRSAI_TEXT_MODEL` | 空 / empty | 有值才写入 `grsai-text`（优先级 90）<br>Writes `grsai-text` only when set (priority 90) |
+| `GRSAI_VIDEO_MODEL` | 空 / empty | 有值才写入 `grsai-video`（优先级 90）<br>Writes `grsai-video` only when set (priority 90) |
 
-> **说明**：制作台中的模型仍可在「设置」页维护。织界用 `backend/.env` 的 `CODECC_*` 在启动时写入配置，真实密钥不要进 git。<br>
-> **Note**: Studio models can still be edited on the Settings page. RPG mode writes `CODECC_*` from `backend/.env` at startup. Do not commit real keys.
+> **说明**：制作台中的模型仍可在「设置」页维护。`CODECC_*` 与 `GRSAI_*` 都在启动时从 `backend/.env` 写入数据库。grsai 图片优先级更高；文本和视频仍以 codecc 为准，除非到设置页调高优先级。真实密钥不要进 git。<br>
+> **Note**: Studio models can still be edited on the Settings page. Startup writes both `CODECC_*` and `GRSAI_*` from `backend/.env`. The grsai image config has higher priority; text and video stay on codecc unless their priority is raised in Settings. Do not commit real keys.
 
 ### 📥 安装依赖 / Installation
 

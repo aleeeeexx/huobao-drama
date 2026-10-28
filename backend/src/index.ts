@@ -25,6 +25,7 @@ import storage from './routes/storage.js'
 import serverUpdate from './routes/serverUpdate.js'
 import rpg from './routes/rpg.js'
 import { bootstrapCodeccConfigs } from './services/codecc-config.js'
+import { bootstrapGrsaiConfigs } from './services/grsai-config.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { resumeInterruptedTasks } from './services/generation.js'
 import { DATA_ROOT } from './utils/paths.js'
@@ -88,6 +89,7 @@ app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 
 const port = Number(process.env.PORT || 5679)
 await bootstrapCodeccConfigs()
+await bootstrapGrsaiConfigs()
 console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
 
 await resumeInterruptedTasks()
