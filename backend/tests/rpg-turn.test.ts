@@ -11,9 +11,13 @@ import {
   formatScreenplayScene,
   locationFromNarrativeHeader,
   narrativeFromScreenplay,
+  parseTurnId,
+  pickSessionTurn,
   projectWorldState,
+  publicAssetPath,
   resolvePlayerAction,
   resolvePlayChoices,
+  serializePlayAssets,
   stripChoiceTail,
   stripPipelineMeta,
   visibleNarrative,
@@ -398,4 +402,41 @@ test('grok video adapter reads request_id and done url', () => {
   )
   assert.match(request.url, /\/v1\/videos\/generations$/)
   assert.equal(request.body.duration, 6)
+})
+
+test('image and video requests can name a turn, and omit means the latest one', () => {
+  const turns = [{ id: 3 }, { id: 9 }]
+  assert.equal(pickSessionTurn(turns)?.id, 9)
+  assert.equal(pickSessionTurn(turns, undefined)?.id, 9)
+  assert.equal(pickSessionTurn(turns, 3)?.id, 3)
+  assert.equal(pickSessionTurn([], undefined), undefined)
+  assert.equal(pickSessionTurn(turns, 4), undefined)
+  assert.equal(pickSessionTurn(turns, 1.5), undefined)
+  assert.equal(pickSessionTurn(turns, 0), undefined)
+
+  assert.equal(parseTurnId(undefined), undefined)
+  assert.equal(parseTurnId(null), undefined)
+  assert.equal(parseTurnId(''), undefined)
+  assert.equal(parseTurnId(4), 4)
+  assert.equal(parseTurnId('8'), 8)
+  assert.throws(() => parseTurnId(1.5), /这一幕不在这局游戏里/)
+  assert.throws(() => parseTurnId(0), /这一幕不在这局游戏里/)
+  assert.throws(() => parseTurnId('nope'), /这一幕不在这局游戏里/)
+})
+
+test('episode plates keep a public image path, including a local file when image_url is blank', () => {
+  assert.equal(publicAssetPath('https://cdn.example/a.png'), 'https://cdn.example/a.png')
+  assert.equal(publicAssetPath('static/images/a.png'), '/static/images/a.png')
+  const assets = serializePlayAssets({
+    characters: [{ id: 1, name: '老板娘', imageUrl: 'static/images/host.png' }],
+    scenes: [{ id: 4, location: '雾隐茶寮', time: '子时', imageUrl: '  ', localPath: 'static/images/scene.png' }],
+    props: [{ id: 8, name: '茶券', imageUrl: null, localPath: null }],
+  })
+  assert.equal(assets.characters[0].name, '老板娘')
+  assert.equal(assets.characters[0].image_url, '/static/images/host.png')
+  assert.equal(assets.scenes[0].location, '雾隐茶寮')
+  assert.equal(assets.scenes[0].time, '子时')
+  assert.equal(assets.scenes[0].image_url, '/static/images/scene.png')
+  assert.equal(assets.props[0].name, '茶券')
+  assert.equal(assets.props[0].image_url, null)
 })

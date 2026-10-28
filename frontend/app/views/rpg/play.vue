@@ -11,38 +11,37 @@
         <p class="scene-name">{{ state.scene.location || '尚未开场' }}</p>
         <p class="dim">{{ state.scene.time }}</p>
         <p v-if="state.scene.summary" class="scene-summary">{{ state.scene.summary }}</p>
-      </section>
-
-      <div class="media-actions">
-        <button class="btn" type="button" :disabled="!latest || mediaBusy === 'image'" @click="illustrate">
-          {{ imageLabel }}
-        </button>
-        <button class="btn" type="button" :disabled="!latest || mediaBusy === 'video'" @click="film">
-          {{ videoLabel }}
-        </button>
-      </div>
-      <p v-if="latest?.image_error || latest?.video_error" class="media-error">{{ latest.image_error || latest.video_error }}</p>
-      <figure v-if="latest?.image_url" class="still">
         <button
-          ref="stillOpenButton"
+          v-if="currentScenePlate"
           type="button"
-          class="still-open"
-          :aria-expanded="stillOpen"
+          class="plate-open plate-wide"
+          :aria-expanded="viewer?.key === 'now-scene-' + currentScenePlate.id"
           aria-haspopup="dialog"
-          @click="openStill"
+          @click="openStill($event, currentScenePlate.image_url, currentScenePlate.location || '场景', 'now-scene-' + currentScenePlate.id)"
         >
-          <img :src="latest.image_url" alt="这一幕的剧情图" />
+          <img :src="currentScenePlate.image_url" :alt="currentScenePlate.location || '场景'" />
         </button>
-      </figure>
-      <video v-if="latest?.video_url" class="clip" controls :src="latest.video_url"></video>
+      </section>
 
       <section class="block">
         <h2>人物</h2>
-        <ul v-if="state.characters.length">
-          <li v-for="person in state.characters" :key="person.name">
-            <strong>{{ person.name }}</strong>
-            <span>{{ person.role }}</span>
-            <em>{{ person.status }}</em>
+        <ul v-if="people.length">
+          <li v-for="person in people" :key="person.name" :class="{ 'with-plate': person.image_url }">
+            <button
+              v-if="person.image_url"
+              type="button"
+              class="plate-open plate-portrait"
+              :aria-expanded="viewer?.key === 'now-character-' + person.plate_id"
+              aria-haspopup="dialog"
+              @click="openStill($event, person.image_url, person.name, 'now-character-' + person.plate_id)"
+            >
+              <img :src="person.image_url" :alt="person.name" />
+            </button>
+            <div class="who-copy">
+              <strong>{{ person.name }}</strong>
+              <span>{{ person.role }}</span>
+              <em>{{ person.status }}</em>
+            </div>
           </li>
         </ul>
         <p v-else class="dim">还没有人走进这一幕。</p>
@@ -50,11 +49,23 @@
 
       <section class="block">
         <h2>物品</h2>
-        <ul v-if="state.items.length">
-          <li v-for="item in state.items" :key="item.name">
-            <strong>{{ item.name }}</strong>
-            <span>{{ item.holder }}</span>
-            <em>{{ item.description }}</em>
+        <ul v-if="belongings.length">
+          <li v-for="item in belongings" :key="item.name" :class="{ 'with-plate': item.image_url }">
+            <button
+              v-if="item.image_url"
+              type="button"
+              class="plate-open plate-portrait"
+              :aria-expanded="viewer?.key === 'now-prop-' + item.plate_id"
+              aria-haspopup="dialog"
+              @click="openStill($event, item.image_url, item.name, 'now-prop-' + item.plate_id)"
+            >
+              <img :src="item.image_url" :alt="item.name" />
+            </button>
+            <div class="who-copy">
+              <strong>{{ item.name }}</strong>
+              <span>{{ item.holder }}</span>
+              <em>{{ item.description }}</em>
+            </div>
           </li>
         </ul>
         <p v-else class="dim">身上还是空的。</p>
@@ -72,6 +83,28 @@
         <p v-else class="dim">还没有明确要办的事。</p>
       </section>
 
+      <section class="block">
+        <h2>物料</h2>
+        <ul v-if="readyPlates.length" class="plate-list">
+          <li v-for="plate in readyPlates" :key="plate.key" class="plate-row">
+            <button
+              type="button"
+              class="plate-open"
+              :aria-expanded="viewer?.key === plate.key"
+              aria-haspopup="dialog"
+              @click="openStill($event, plate.image_url, plate.name, plate.key)"
+            >
+              <img :src="plate.image_url" :alt="plate.name" />
+            </button>
+            <span class="plate-copy">
+              <strong>{{ plate.name }}</strong>
+              <em>{{ plate.kind }}</em>
+            </span>
+          </li>
+        </ul>
+        <p v-else class="dim">定妆和场景图还在后台补，稍后刷新可见</p>
+      </section>
+
       <NuxtLink v-if="session?.drama_id" class="studio-link" :to="`/drama/${session.drama_id}/episode/1`">在制作台打开这一集</NuxtLink>
     </aside>
 
@@ -82,6 +115,30 @@
         <p v-if="turn.player_mode === 'choice'" class="player-line">你选择了：{{ turn.player_text }}</p>
         <p v-else-if="turn.player_mode === 'free'" class="player-line">你写下：{{ turn.player_text }}</p>
         <p class="narrative">{{ turn.narrative }}</p>
+        <div class="turn-media">
+          <div class="media-actions">
+            <button class="btn" type="button" :disabled="imageBusy(turn)" @click="illustrate(turn)">
+              {{ imageLabel(turn) }}
+            </button>
+            <button class="btn" type="button" :disabled="videoBusy(turn)" @click="film(turn)">
+              {{ videoLabel(turn) }}
+            </button>
+          </div>
+          <p v-if="turn.image_error" class="media-error">{{ turn.image_error }}</p>
+          <p v-if="turn.video_error" class="media-error">{{ turn.video_error }}</p>
+          <figure v-if="turn.image_url" class="still">
+            <button
+              type="button"
+              class="still-open"
+              :aria-expanded="viewer?.key === 'turn-' + turn.id"
+              aria-haspopup="dialog"
+              @click="openStill($event, turn.image_url, '这一幕的剧情图', 'turn-' + turn.id)"
+            >
+              <img :src="turn.image_url" alt="这一幕的剧情图" />
+            </button>
+          </figure>
+          <video v-if="turn.video_url" class="clip" controls :src="turn.video_url"></video>
+        </div>
       </article>
       <article v-if="acting" class="turn live">
         <p v-if="pendingAction" class="player-line">{{ pendingAction }}</p>
@@ -121,11 +178,11 @@
 
     <Teleport to="body">
       <div
-        v-if="stillOpen && latest?.image_url"
+        v-if="viewer"
         class="overlay still-viewer"
         role="dialog"
         aria-modal="true"
-        aria-label="这一幕的剧情图"
+        :aria-label="viewer.alt"
         @click.self="closeStill"
       >
         <button
@@ -137,7 +194,7 @@
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
-        <img class="still-viewer-img" :src="latest.image_url" alt="这一幕的剧情图" />
+        <img class="still-viewer-img" :src="viewer.src" :alt="viewer.alt" />
       </div>
     </Teleport>
   </div>
@@ -158,12 +215,15 @@ const acting = ref(false)
 const draft = ref('')
 const freeText = ref('')
 const pendingAction = ref('')
-const mediaBusy = ref('')
+const mediaBusy = ref<Record<string, true>>({})
 const logEl = ref<HTMLElement | null>(null)
-const stillOpen = ref(false)
-const stillOpenButton = ref<HTMLButtonElement | null>(null)
+const viewer = ref<{ src: string; alt: string; key: string } | null>(null)
+const viewerOpener = ref<HTMLButtonElement | null>(null)
 const stillCloseButton = ref<HTMLButtonElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let platePollsLeft = 0
+
+const PLATE_POLL_LIMIT = 60
 
 useHead(() => ({ title: session.value?.title ? `${session.value.title} · 织界` : '织界' }))
 
@@ -178,14 +238,89 @@ const state = computed(() => latest.value?.world_state || session.value?.world_s
   items: [],
   quests: [],
 })
-const imageLabel = computed(() => {
-  if (mediaBusy.value === 'image' || latest.value?.image_status === 'processing') return '剧情图绘制中'
-  return latest.value?.image_url ? '重画这一幕' : '生成剧情图'
+const playAssets = computed(() => session.value?.assets || { characters: [], scenes: [], props: [] })
+const LISTED_NAME_LIMIT = 40
+const currentScenePlate = computed(() => {
+  const scenes = playAssets.value.scenes || []
+  const sceneId = latest.value?.scene_id
+  if (sceneId) {
+    const byId = scenes.find((scene: { id: number; image_url?: string | null }) => scene.id === sceneId)
+    if (byId) return byId.image_url ? byId : null
+  }
+  if (!latest.value) return null
+  const location = state.value.scene.location
+  if (!location) return null
+  return scenes.find((scene: { location?: string; image_url?: string | null }) => sameListedName(scene.location, location) && scene.image_url) || null
 })
-const videoLabel = computed(() => {
-  if (mediaBusy.value === 'video' || latest.value?.video_status === 'processing') return '影像拍摄中'
-  return latest.value?.video_url ? '重拍这一幕' : '生成影像'
+const people = computed(() => (state.value.characters || []).map((person: { name: string; role: string; status: string }) => {
+  const plate = plateByName(playAssets.value.characters, person.name)
+  return { ...person, plate_id: plate?.id ?? null, image_url: plate?.image_url || '' }
+}))
+const belongings = computed(() => (state.value.items || []).map((item: { name: string; holder: string; description: string }) => {
+  const plate = plateByName(playAssets.value.props, item.name)
+  return { ...item, plate_id: plate?.id ?? null, image_url: plate?.image_url || '' }
+}))
+const readyPlates = computed(() => {
+  const rows: Array<{ key: string; kind: string; name: string; image_url: string }> = []
+  for (const scene of playAssets.value.scenes || []) {
+    if (!scene.image_url) continue
+    rows.push({ key: `scene-${scene.id}`, kind: '场景', name: scene.location || '场景', image_url: scene.image_url })
+  }
+  for (const person of playAssets.value.characters || []) {
+    if (!person.image_url) continue
+    rows.push({ key: `character-${person.id}`, kind: '人物', name: person.name || '人物', image_url: person.image_url })
+  }
+  for (const item of playAssets.value.props || []) {
+    if (!item.image_url) continue
+    rows.push({ key: `prop-${item.id}`, kind: '物品', name: item.name || '物品', image_url: item.image_url })
+  }
+  return rows
 })
+
+function sameListedName(plateName: string | undefined, listedName: string) {
+  if (!plateName || !listedName) return false
+  if (plateName === listedName) return true
+  return plateName.slice(0, LISTED_NAME_LIMIT) === listedName
+}
+
+function plateByName(rows: Array<{ id: number; name?: string; image_url?: string | null }> | undefined, name: string) {
+  if (!name) return null
+  return (rows || []).find(row => sameListedName(row.name, name) && row.image_url) || null
+}
+
+function busyKey(turnId: number, kind: 'image' | 'video') {
+  return `${turnId}:${kind}`
+}
+
+function isTurnBusy(turnId: number, kind: 'image' | 'video') {
+  return !!mediaBusy.value[busyKey(turnId, kind)]
+}
+
+function markBusy(turnId: number, kind: 'image' | 'video', active: boolean) {
+  const key = busyKey(turnId, kind)
+  const next = { ...mediaBusy.value }
+  if (active) next[key] = true
+  else delete next[key]
+  mediaBusy.value = next
+}
+
+function imageBusy(turn: { id: number; image_status?: string | null }) {
+  return isTurnBusy(turn.id, 'image') || turn.image_status === 'processing'
+}
+
+function videoBusy(turn: { id: number; video_status?: string | null }) {
+  return isTurnBusy(turn.id, 'video') || turn.video_status === 'processing'
+}
+
+function imageLabel(turn: { id: number; image_url?: string | null; image_status?: string | null }) {
+  if (imageBusy(turn)) return '剧情图绘制中'
+  return turn.image_url ? '重画这一幕' : '生成剧情图'
+}
+
+function videoLabel(turn: { id: number; video_url?: string | null; video_status?: string | null }) {
+  if (videoBusy(turn)) return '影像拍摄中'
+  return turn.video_url ? '重拍这一幕' : '生成影像'
+}
 
 function questLabel(status: string) {
   if (status === 'done') return '完成'
@@ -198,16 +333,33 @@ async function load() {
 }
 
 function needsMediaPoll() {
-  const turn = latest.value
-  return !!turn && (turn.image_status === 'processing' || turn.video_status === 'processing')
+  return (session.value?.turns || []).some((turn: { image_status?: string | null; video_status?: string | null }) => (
+    turn.image_status === 'processing' || turn.video_status === 'processing'
+  ))
+}
+
+function platesPending() {
+  const assets = playAssets.value
+  const plates = [...(assets.scenes || []), ...(assets.characters || []), ...(assets.props || [])]
+  return plates.length > 0 && plates.some((item: { image_url?: string | null }) => !item.image_url)
+}
+
+function armPlatePoll() {
+  if (platesPending()) platePollsLeft = PLATE_POLL_LIMIT
+}
+
+function shouldPoll() {
+  return needsMediaPoll() || (platePollsLeft > 0 && platesPending())
 }
 
 function startPoll() {
   stopPoll()
+  if (!shouldPoll()) return
   pollTimer = setInterval(async () => {
     try {
       await load()
-      if (!needsMediaPoll()) stopPoll()
+      if (platePollsLeft > 0) platePollsLeft -= 1
+      if (!shouldPoll()) stopPoll()
     } catch { /* 下一轮再问 */ }
   }, 3000)
 }
@@ -271,10 +423,14 @@ async function act(body: { mode: string; choice_id?: string; text?: string }) {
     pendingAction.value = ''
     freeText.value = ''
     await load()
+    armPlatePoll()
+    if (shouldPoll()) startPoll()
     await scrollLog()
   } catch (error) {
     toastError(error, { fallback: '这一幕没有写完' })
     await load().catch(() => {})
+    armPlatePoll()
+    if (shouldPoll()) startPoll()
   } finally {
     acting.value = false
   }
@@ -306,15 +462,18 @@ function sendFree() {
   return act({ mode: 'free', text })
 }
 
-function openStill() {
-  if (!latest.value?.image_url) return
-  stillOpen.value = true
+function openStill(event: MouseEvent, src: string, alt: string, key: string) {
+  if (!src) return
+  viewerOpener.value = event.currentTarget instanceof HTMLButtonElement ? event.currentTarget : null
+  viewer.value = { src, alt, key }
 }
 
 function closeStill() {
-  if (!stillOpen.value) return
-  stillOpen.value = false
-  nextTick(() => stillOpenButton.value?.focus())
+  if (!viewer.value) return
+  const opener = viewerOpener.value
+  viewer.value = null
+  viewerOpener.value = null
+  nextTick(() => opener?.focus())
 }
 
 function onStillViewerKeydown(event: KeyboardEvent) {
@@ -323,7 +482,7 @@ function onStillViewerKeydown(event: KeyboardEvent) {
   closeStill()
 }
 
-watch(stillOpen, async (open) => {
+watch(() => !!viewer.value, async (open) => {
   if (!open) {
     window.removeEventListener('keydown', onStillViewerKeydown)
     return
@@ -334,45 +493,57 @@ watch(stillOpen, async (open) => {
 })
 
 watch(sessionId, () => {
-  stillOpen.value = false
+  viewer.value = null
+  viewerOpener.value = null
 })
 
-async function illustrate() {
-  mediaBusy.value = 'image'
+async function illustrate(turn: { id: number; image_url?: string | null; image_status?: string | null }) {
+  if (imageBusy(turn)) return
+  markBusy(turn.id, 'image', true)
   try {
-    const redraw = !!latest.value?.image_url
-    await rpgAPI.illustrate(sessionId.value, redraw ? { force: true } : undefined)
+    await rpgAPI.illustrate(sessionId.value, {
+      turn_id: turn.id,
+      ...(turn.image_url ? { force: true } : {}),
+    })
     toast('正在对照定妆和场景图画这一幕')
     await load()
+    armPlatePoll()
     startPoll()
   } catch (error) {
     toastError(error, { fallback: '剧情图没有画出来' })
   } finally {
-    mediaBusy.value = ''
+    markBusy(turn.id, 'image', false)
   }
 }
 
-async function film() {
-  mediaBusy.value = 'video'
+async function film(turn: { id: number; video_status?: string | null }) {
+  if (videoBusy(turn)) return
+  markBusy(turn.id, 'video', true)
   try {
-    await rpgAPI.film(sessionId.value)
+    await rpgAPI.film(sessionId.value, { turn_id: turn.id })
     toast('正在拍这一幕，通常要几分钟')
     await load()
+    armPlatePoll()
     startPoll()
   } catch (error) {
     toastError(error, { fallback: '影像没有拍出来' })
   } finally {
-    mediaBusy.value = ''
+    markBusy(turn.id, 'video', false)
   }
 }
 
 onMounted(async () => {
   try {
     await load()
+    armPlatePoll()
     if (!session.value?.turns?.length) {
       await shareOpening(sessionId.value, () => act({ mode: 'opening' }))
-      if (!session.value?.turns?.length) await load()
-    } else if (needsMediaPoll()) startPoll()
+      if (!session.value?.turns?.length) {
+        await load()
+        armPlatePoll()
+      }
+    }
+    if (shouldPoll()) startPoll()
   } catch (error) {
     toastError(error, { fallback: '这一局没有打开' })
   } finally {
@@ -434,12 +605,48 @@ onBeforeUnmount(() => {
 .scene-name { font-size: 22px; }
 .block ul { list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .block li { display: flex; flex-direction: column; gap: 1px; }
+.block li.with-plate { flex-direction: row; align-items: flex-start; gap: 10px; }
+.who-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .block strong { font-size: 14px; }
 .block span, .block em { font-style: normal; color: var(--text-2); font-size: 12px; }
 .quest[data-status="done"] { color: var(--success); }
 .quest[data-status="failed"] { color: var(--error); }
 .media-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .media-error { color: var(--error); font-size: 12px; line-height: 1.5; }
+.turn-media { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.plate-list { list-style: none; }
+.block li.plate-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.plate-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.plate-copy em { color: var(--text-3); font-size: 11px; letter-spacing: 0.08em; }
+.plate-open {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #111;
+  border-radius: 10px;
+  overflow: hidden;
+  color: inherit;
+  font: inherit;
+  line-height: 0;
+  cursor: zoom-in;
+  appearance: none;
+}
+.plate-open img { display: block; width: 100%; height: 48px; object-fit: cover; }
+.plate-open:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--button-focus);
+}
+.plate-wide { margin-top: 8px; border-radius: 14px; }
+.plate-wide img { height: 148px; }
+.plate-portrait { width: 44px; flex: none; border-radius: 8px; }
+.plate-portrait img { width: 44px; height: 58px; }
 .still, .clip { width: 100%; border-radius: 14px; background: #111; }
 .still img, .clip { display: block; width: 100%; max-height: 180px; object-fit: cover; }
 .still img { border-radius: 14px; }
@@ -502,6 +709,7 @@ onBeforeUnmount(() => {
 }
 .waiting { color: var(--text-3); }
 .turn { max-width: 720px; }
+.turn .still, .turn .clip { max-width: 520px; }
 .player-line { color: var(--accent-text); font-size: 13px; margin-bottom: 8px; }
 .narrative {
   font-family: "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", serif;

@@ -232,4 +232,12 @@ test('play stills borrow studio plates and do not write the composed frame back 
   assert.match(film, /referenceImageUrls/)
   assert.match(film, /applyReferenceMarkers/)
   assert.equal(PLAY_REFERENCE_WAIT_MS, 180_000)
+  assert.match(illustrate, /turnForMedia\(loaded, options\?\.turnId, '还没有可以配图的场面'\)/)
+  assert.match(film, /turnForMedia\(loaded, options\?\.turnId, '还没有可以生成影像的场面'\)/)
+  assert.match(engine, /assets: serializePlayAssets\(assets\)/)
+
+  const routes = readFileSync(new URL('../src/routes/rpg.ts', import.meta.url), 'utf8')
+  assert.match(routes, /parseTurnId\(body\?\.turn_id\)/)
+  assert.match(routes, /illustrateSession\(Number\(c\.req\.param\('id'\)\), \{ force, turnId \}\)/)
+  assert.match(routes, /filmSession\(Number\(c\.req\.param\('id'\)\), \{ turnId \}\)/)
 })
