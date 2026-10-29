@@ -7,6 +7,14 @@ import { PLAY_STILL_PROMPT_MARK, type ReferenceKind } from './references.js'
 
 export const RPG_STATE_SENTINEL = '<<<RPG_STATE>>>'
 const FREE_TEXT_MAX = 400
+/**
+ * 火宝小说创建项目时的默认每章字数。
+ * 织界一幕给玩家看的正文按这一章写，不再压成几百字的短剧节拍。
+ */
+export const PLAY_NOVEL_CHAPTER_CHARS = 3000
+const PLAY_NOVEL_CHAPTER_MIN_CHARS = 1800
+/** 续写只贴前章结尾。全文由 read_episode_script 读取原稿。 */
+export const PREVIOUS_CHAPTER_EXCERPT_CHARS = 600
 const STILL_FRAME_NOTE = `${PLAY_STILL_PROMPT_MARK}，真实演员在实景中表演，主体清晰，不要文字，不要水印，不要分镜格子，不要动漫，不要二次元，不要卡通，不要插画`
 
 export interface RpgChoice {
@@ -375,7 +383,12 @@ export function isPipelineMetaSentence(sentence: string): boolean {
   if (/补上正文|正文补上/.test(text)) return true
   if (/先把这一幕|这一幕写入剧本/.test(text)) return true
   if (/写入剧本/.test(text) && /(?:我|先把|补上|保存|读取|这一幕)/.test(text)) return true
-  if (/剧本改写|不要绕过工具|不要写进回复|不要输出任何文字|从故事的第一句/.test(text)) return true
+  if (/剧本改写|不要绕过工具|不要写进回复|不要输出任何文字|从故事的第一句|从这一章的第一句/.test(text)) return true
+  if (
+    new RegExp(`不要少于${PLAY_NOVEL_CHAPTER_MIN_CHARS}字`).test(text)
+    && new RegExp(`大约${PLAY_NOVEL_CHAPTER_CHARS}字|篇幅`).test(text)
+  ) return true
+  if (/每场30-60秒/.test(text) && /剧本|正文|旁白|扩写/.test(text)) return true
   if (/^(?:我先|让我先|接下来我)/.test(text) && /(?:剧本|正文|本集|续写第)/.test(text)) return true
   if (text.includes(RPG_STATE_SENTINEL)) return true
   if (/不超过18字/.test(text) && /choices|选项/.test(text)) return true
@@ -688,6 +701,19 @@ function referenceCaption(references: Array<{ kind: ReferenceKind; name: string 
   return `参考图顺序：${lines.join(' ')}。人物面容、服装与场景空间以对应参考图为准，保持同一张脸、同一套衣服、同一个地点。`
 }
 
+/**
+ * 续写只保留前章结尾。火宝小说的下一章提示词也是贴结尾段，不把前面整章再塞进提示词。
+ * 句号落在摘录前部时丢掉半句；找不到句号就整段保留。
+ */
+export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EXCERPT_CHARS): string {
+  const text = (recent || '').trim()
+  if (text.length <= max) return text
+  const tail = text.slice(-max)
+  const boundary = tail.search(/[。！？!?]/u)
+  if (boundary === -1 || boundary > 40) return tail.trim()
+  return tail.slice(boundary + 1).trim() || tail.trim()
+}
+
 export function buildPlayRewriteMessage(input: {
   worldTitle: string
   genre: string
@@ -697,21 +723,41 @@ export function buildPlayRewriteMessage(input: {
   existingScript: string
   recent: string
 }): string {
+  const excerpt = previousChapterExcerpt(input.recent)
+  const continuing = input.turnIndex > 1
+  const chapterTask = continuing
+    ? [
+        '这是下一章。必须接上前章结尾，并写下玩家这一步行动带来的后果。',
+        '从后果写起，不要用「上一章」「前回」回顾前情。',
+        excerpt ? `前章结尾：\n${excerpt}` : '前章结尾不在这条消息里。以 read_episode_script 读到的原稿最后一段为准。',
+      ].join('\n')
+    : '这是第一章。把主角放进世界，从设定里已经发生的局面写起。不要先解释规则，不要先列人物表。'
   return [
-    '这是互动短剧「织界」的一回合。你仍是剧本改写 Agent，必须用工具读完再保存。不要绕过工具直接结束。工具调用不要写进回复。',
+    '这是互动小说「织界」的一章。你仍是剧本改写 Agent：先读原稿，再写给玩家看的章节正文，最后把这一章收成格式化剧本保存。必须用工具读完再保存。不要绕过工具直接结束。工具调用不要写进回复。',
+    '玩家看到的回复是小说正文，不是短剧节拍。工作室技能里的「每场 30-60 秒」「对话驱动、减少旁白」「不要扩写」只约束 save_script 里的格式化剧本，不要用来缩短给玩家看的这一章。',
     `世界：${input.worldTitle}`,
     input.genre ? `类型：${input.genre}` : '',
     `设定：${input.premise}`,
-    input.recent ? `最近剧情：\n${input.recent}` : '',
     input.existingScript
-      ? `已保存的剧本（续写时整段保留，只在末尾追加本幕）：\n${input.existingScript}`
+      ? `已保存的格式化剧本在下面。续写时整段保留，只在末尾追加本幕。玩家已经读过的正文以 read_episode_script 读到的原稿为准，不要在回复里复述旧剧本。\n${input.existingScript}`
       : '还没有已保存的剧本。',
     input.actionLine,
+    chapterTask,
     '请按顺序完成：',
-    '1. 调用 read_episode_script 读取当前集正文。这一步不要输出任何文字。',
-    `2. 回复只写第 ${input.turnIndex} 幕的故事，并且从故事的第一句写起：简体中文，第二人称「你」，280 到 420 字，一段或两段。不要写场景头，不要复述旧剧本，不要写「选项」三个字。不要写计划、步骤或工作说明，也不要出现「读取本集」「写入剧本」「落进剧本」「保存剧本」「补上正文」「给玩家看的正文」。`,
-    `3. 正文结束后另起一行，只输出一次 ${RPG_STATE_SENTINEL}，然后输出 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。恰好 3 条，方向不同。不要用 markdown 代码块。不要在 JSON 里写角色、物品或场景；那些由提取 Agent 从剧本里读取。`,
-    `4. 调用 save_script 保存完整剧本：已有场景全部保留，并追加一个场景，场景头为 ## S${input.turnIndex} | 内景或外景 · 地点 | 时间。这一步不要输出任何文字。格式化剧本只放进 save_script，不要把分隔符和 JSON 写进剧本。不要替玩家写结局。`,
+    '1. 调用 read_episode_script 读取当前集正文。读到的是已经写下的小说原稿。这一步不要输出任何文字。',
+    [
+      `2. 回复只写第 ${input.turnIndex} 章，并且从这一章的第一句写起。`,
+      `简体中文小说正文，第一人称「我」，「我」就是玩家扮演的主角。设定里的「你」只是在向玩家介绍主角，正文里写成「我」的经历。`,
+      `篇幅大约 ${PLAY_NOVEL_CHAPTER_CHARS} 字，不要少于 ${PLAY_NOVEL_CHAPTER_MIN_CHARS} 字，可以略多。多分段，至少两场戏。`,
+      '按小说章节写，不要按短视频节拍写：对话、动作和心理交替；环境跟着场面走，不要单独堆一段感官清单。',
+      '对话用口语，放在引号里，不同的人说话不一样。不要写成「角色名：（表情）台词」，那是剧本格式，只能出现在 save_script 里。',
+      '句子长短交错。不要排比，不要每段结尾总结情绪，不要用「空气中弥漫着」这类空镜套话。',
+      '不要写场景头，不要写「选项」三个字，不要列大纲，不要小标题，不要 markdown。',
+      '章末留一个还没做完的钩子，不要替玩家写死结局，也不要替玩家做出下一章的选择。',
+      '不要写计划、步骤或工作说明，也不要出现「读取本集」「写入剧本」「落进剧本」「保存剧本」「补上正文」「给玩家看的正文」。',
+    ].join('\n'),
+    `3. 正文结束后另起一行，只输出一次 ${RPG_STATE_SENTINEL}，然后输出 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。恰好 3 条，方向不同，都是主角此刻做得成的事。不要用 markdown 代码块。不要在 JSON 里写角色、物品或场景；那些由提取 Agent 从剧本里读取。`,
+    `4. 调用 save_script 保存完整剧本：已有场景全部保留，并追加一个场景，场景头为 ## S${input.turnIndex} | 内景或外景 · 地点 | 时间。这一场用格式化剧本记下本章真正出场的人物、地点、关键物和对白，主角在剧本里也写成「我」，情节与正文一致，可以比正文短，但不要改成另一件事。本幕只用这一个场景头。这一步不要输出任何文字。格式化剧本只放进 save_script，不要把分隔符和 JSON 写进剧本。不要替玩家写结局。`,
   ].filter(Boolean).join('\n\n')
 }
 
@@ -747,7 +793,7 @@ export function buildPlayStoryboardMessage(input: {
 }
 
 export function describeAction(action: ResolvedAction, choices: RpgChoice[]): string {
-  if (action.mode === 'opening') return '请写下这一局的开场，把玩家放进世界。'
+  if (action.mode === 'opening') return '请写下第一章正文，把主角放进世界。'
   if (action.mode === 'choice') {
     const matched = choices.find(choice => choice.id === action.choiceId)
     const detail = matched?.detail ? `（${matched.detail}）` : ''
