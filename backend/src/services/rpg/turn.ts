@@ -339,8 +339,9 @@ function trailingKind(rest: string): 'empty' | 'junk' | 'prose' {
   if (!trimmed) return 'empty'
   if (/^[。！？!?]/.test(trimmed)) return 'prose'
   const compact = trimmed.replace(/\s+/g, '')
+  if (compact.length <= 120 && isPipelineMetaSentence(compact)) return 'junk'
   if (/^(?:我先|让我先|接下来我)/.test(compact) && /剧本|正文|本集|save_script|read_episode_script/.test(compact)) return 'junk'
-  if (compact.length <= 120 && /save_script|read_episode_script|写入剧本|保存剧本|保存完整剧本|落进剧本|补上正文|给玩家看的正文|给你看的正文/.test(compact)) {
+  if (compact.length <= 120 && /save_script|read_episode_script|写入剧本|保存剧本|保存完整剧本|落进剧本|补上正文|给玩家看的正文|给你看的正文|已经写下的原稿|接着写第/.test(compact)) {
     return 'junk'
   }
   if (/^[{[]/.test(trimmed)) return 'junk'
@@ -367,6 +368,23 @@ function takeSentence(text: string, final: boolean): { sentence: string; rest: s
   return { sentence, rest: text.slice(sentence.length) }
 }
 
+const CHAPTER_NO = '[0-9一二三四五六七八九十百千]+'
+
+/**
+ * 「我先读取这一集已经写下的原稿，再接着写第5章」这类工序句。
+ * 故事里的「我先读取告示上的名字」没有原稿、这一集和章号，要留下。
+ */
+function isManuscriptProcessSentence(text: string): boolean {
+  if (new RegExp(`^第${CHAPTER_NO}章[。！？]?$`).test(text)) return true
+  if (new RegExp(`^第${CHAPTER_NO}章\\s*[-–—：:].{1,20}[。！？]?$`).test(text)) return true
+  if (new RegExp(`接着写第${CHAPTER_NO}[章幕]`).test(text)) return true
+  if (new RegExp(`续写第${CHAPTER_NO}章`).test(text)) return true
+  if (/已经写下的原稿/.test(text)) return true
+  if (/(?:读取|先读)/.test(text) && /原稿/.test(text) && /(?:这一集(?!市)|本集|当前集|接着写|续写)/.test(text)) return true
+  if (/^(?:我先|让我先|接下来我)/.test(text) && /(?:读取|先读|接着写|续写)/.test(text) && /(?:原稿|这一集(?!市))/.test(text)) return true
+  return false
+}
+
 /**
  * 工序说明和故事正文走的是同一条 textStream。
  * 只丢掉「读本集 / 写入剧本 / 补上正文」这类句子，不改故事里的纸页、信和杯子。
@@ -384,6 +402,7 @@ export function isPipelineMetaSentence(sentence: string): boolean {
   if (/先把这一幕|这一幕写入剧本/.test(text)) return true
   if (/写入剧本/.test(text) && /(?:我|先把|补上|保存|读取|这一幕)/.test(text)) return true
   if (/剧本改写|不要绕过工具|不要写进回复|不要输出任何文字|从故事的第一句|从这一章的第一句/.test(text)) return true
+  if (isManuscriptProcessSentence(text)) return true
   if (
     new RegExp(`不要少于${PLAY_NOVEL_CHAPTER_MIN_CHARS}字`).test(text)
     && new RegExp(`大约${PLAY_NOVEL_CHAPTER_CHARS}字|篇幅`).test(text)
@@ -539,8 +558,16 @@ export function stripChoiceTail(script: string): string {
  */
 const REPEATED_PROSE_MIN = 12
 
+const SCREENPLAY_DIALOGUE_LINE = /^([^\s\n：:，。！？!?、]{1,8})：（([^）\n]{1,20})）\s*/gm
+
+/** 短剧对白「角色名：（表情）台词」只属于剧本。玩家正文改成口语，不留剧本行。 */
+export function novelizeScreenplayDialogue(text: string): string {
+  if (!text) return ''
+  return text.replace(SCREENPLAY_DIALOGUE_LINE, (_match, name: string, cue: string) => `${name}${cue}，`)
+}
+
 export function visibleNarrative(text: string): string {
-  return collapseAdjacentRepeatedProse(stripPipelineMeta(text).trim())
+  return collapseAdjacentRepeatedProse(novelizeScreenplayDialogue(stripPipelineMeta(text)).trim())
 }
 
 interface ProseAtom {
@@ -702,8 +729,8 @@ function referenceCaption(references: Array<{ kind: ReferenceKind; name: string 
 }
 
 /**
- * 续写只保留前章结尾。火宝小说的下一章提示词也是贴结尾段，不把前面整章再塞进提示词。
  * 句号落在摘录前部时丢掉半句；找不到句号就整段保留。
+ * 火宝小说正文续写不用这里，它按原项目截取前章最后 800 字。
  */
 export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EXCERPT_CHARS): string {
   const text = (recent || '').trim()
@@ -714,51 +741,17 @@ export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EX
   return tail.slice(boundary + 1).trim() || tail.trim()
 }
 
-export function buildPlayRewriteMessage(input: {
-  worldTitle: string
-  genre: string
-  premise: string
-  actionLine: string
-  turnIndex: number
-  existingScript: string
-  recent: string
-}): string {
-  const excerpt = previousChapterExcerpt(input.recent)
-  const continuing = input.turnIndex > 1
-  const chapterTask = continuing
-    ? [
-        '这是下一章。必须接上前章结尾，并写下玩家这一步行动带来的后果。',
-        '从后果写起，不要用「上一章」「前回」回顾前情。',
-        excerpt ? `前章结尾：\n${excerpt}` : '前章结尾不在这条消息里。以 read_episode_script 读到的原稿最后一段为准。',
-      ].join('\n')
-    : '这是第一章。把主角放进世界，从设定里已经发生的局面写起。不要先解释规则，不要先列人物表。'
+/**
+ * 火宝小说不产出选项。这是织界外壳：章节正文已经写完，只要 3 条下一步。
+ */
+export function buildPlayChoicesPrompt(chapterText: string): string {
+  const excerpt = (chapterText || '').trim().slice(-800)
   return [
-    '这是互动小说「织界」的一章。你仍是剧本改写 Agent：先读原稿，再写给玩家看的章节正文，最后把这一章收成格式化剧本保存。必须用工具读完再保存。不要绕过工具直接结束。工具调用不要写进回复。',
-    '玩家看到的回复是小说正文，不是短剧节拍。工作室技能里的「每场 30-60 秒」「对话驱动、减少旁白」「不要扩写」只约束 save_script 里的格式化剧本，不要用来缩短给玩家看的这一章。',
-    `世界：${input.worldTitle}`,
-    input.genre ? `类型：${input.genre}` : '',
-    `设定：${input.premise}`,
-    input.existingScript
-      ? `已保存的格式化剧本在下面。续写时整段保留，只在末尾追加本幕。玩家已经读过的正文以 read_episode_script 读到的原稿为准，不要在回复里复述旧剧本。\n${input.existingScript}`
-      : '还没有已保存的剧本。',
-    input.actionLine,
-    chapterTask,
-    '请按顺序完成：',
-    '1. 调用 read_episode_script 读取当前集正文。读到的是已经写下的小说原稿。这一步不要输出任何文字。',
-    [
-      `2. 回复只写第 ${input.turnIndex} 章，并且从这一章的第一句写起。`,
-      `简体中文小说正文，第一人称「我」，「我」就是玩家扮演的主角。设定里的「你」只是在向玩家介绍主角，正文里写成「我」的经历。`,
-      `篇幅大约 ${PLAY_NOVEL_CHAPTER_CHARS} 字，不要少于 ${PLAY_NOVEL_CHAPTER_MIN_CHARS} 字，可以略多。多分段，至少两场戏。`,
-      '按小说章节写，不要按短视频节拍写：对话、动作和心理交替；环境跟着场面走，不要单独堆一段感官清单。',
-      '对话用口语，放在引号里，不同的人说话不一样。不要写成「角色名：（表情）台词」，那是剧本格式，只能出现在 save_script 里。',
-      '句子长短交错。不要排比，不要每段结尾总结情绪，不要用「空气中弥漫着」这类空镜套话。',
-      '不要写场景头，不要写「选项」三个字，不要列大纲，不要小标题，不要 markdown。',
-      '章末留一个还没做完的钩子，不要替玩家写死结局，也不要替玩家做出下一章的选择。',
-      '不要写计划、步骤或工作说明，也不要出现「读取本集」「写入剧本」「落进剧本」「保存剧本」「补上正文」「给玩家看的正文」。',
-    ].join('\n'),
-    `3. 正文结束后另起一行，只输出一次 ${RPG_STATE_SENTINEL}，然后输出 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。恰好 3 条，方向不同，都是主角此刻做得成的事。不要用 markdown 代码块。不要在 JSON 里写角色、物品或场景；那些由提取 Agent 从剧本里读取。`,
-    `4. 调用 save_script 保存完整剧本：已有场景全部保留，并追加一个场景，场景头为 ## S${input.turnIndex} | 内景或外景 · 地点 | 时间。这一场用格式化剧本记下本章真正出场的人物、地点、关键物和对白，主角在剧本里也写成「我」，情节与正文一致，可以比正文短，但不要改成另一件事。本幕只用这一个场景头。这一步不要输出任何文字。格式化剧本只放进 save_script，不要把分隔符和 JSON 写进剧本。不要替玩家写结局。`,
-  ].filter(Boolean).join('\n\n')
+    '下面是刚刚写完的一章小说正文。不要改写，不要续写，不要复述。',
+    excerpt,
+    `只输出一次 ${RPG_STATE_SENTINEL}，然后输出 JSON：{"choices":[{"id":"c1","label":"不超过18字","detail":"不超过36字"},{"id":"c2","label":"第二条","detail":"不同方向"},{"id":"c3","label":"第三条","detail":"再一个方向"}]}。`,
+    '恰好 3 条，方向不同，都是主角此刻做得成的事。不要用 markdown 代码块。不要写正文。',
+  ].join('\n\n')
 }
 
 export function buildPlayStoryboardMessage(input: {

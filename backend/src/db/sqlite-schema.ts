@@ -317,6 +317,7 @@ export const sqliteSchemaStatements = [
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     world_state TEXT NOT NULL,
+    novel_state TEXT,
     turn_count INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -438,6 +439,10 @@ export function initSqliteSchema(sqlite: Database.Database) {
   const taskColumns = new Set((sqlite.prepare('PRAGMA table_info(sys_task)').all() as { name: string }[]).map(c => c.name))
   for (const [name, type] of Object.entries({ config_id: 'INTEGER', config_base_url: 'TEXT', stage: 'TEXT', error_code: 'TEXT' })) {
     if (!taskColumns.has(name)) sqlite.exec(`ALTER TABLE sys_task ADD COLUMN ${name} ${type}`)
+  }
+  const sessionColumns = new Set((sqlite.prepare('PRAGMA table_info(rpg_sessions)').all() as { name: string }[]).map(c => c.name))
+  if (sessionColumns.size && !sessionColumns.has('novel_state')) {
+    sqlite.exec('ALTER TABLE rpg_sessions ADD COLUMN novel_state TEXT')
   }
   const insertSeed = sqlite.prepare(SEED_SQL)
   const upgradeSeed = sqlite.prepare(UPGRADE_SQL)
