@@ -1,7 +1,8 @@
 /**
  * 织界对局编排。
- * 玩家看到的是流式叙事、分支和自由行动。创作本身走短剧工作室：
- * script_rewriter 续写剧本，extractor 同步资产，插画用 prompt_generator 的场景提示词，
+ * 玩家看到的章节走火宝小说的架构、大纲、草稿和定稿。
+ * 短剧剧本是下一步：script_rewriter 按制作台原句把原稿改成剧本。
+ * extractor 同步资产，插画用 prompt_generator 的场景提示词，
  * 影像用 storyboard_breaker 追加本幕分镜，再由 prompt_generator 写视频提示词。
  */
 import { and, asc, desc, eq } from 'drizzle-orm'
@@ -27,23 +28,36 @@ import {
 } from './references.js'
 import { videoModelLabel, writeStoryboardVideoPrompt } from '../video-prompts.js'
 import { runStudioAgent } from '../agent-runner.js'
+import { completeNovelPrompt } from '../novel/complete.js'
+import {
+  appendChapterBlueprint,
+  createNovelProject,
+  exportNovelToText,
+  finalizeChapter,
+  generateArchitecture,
+  generateChapterDraft,
+  maxBlueprintChapter,
+  parseChapterBlueprint,
+  type NovelProject,
+} from '../novel/generator.js'
+import { STUDIO_SCRIPT_REWRITE_MESSAGE } from '../studio-script.js'
 import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
 import { now } from '../../utils/response.js'
 import { PRESET_WORLDS, type WorldSeed } from './worlds.js'
 import {
   assembleStillPrompt,
-  buildPlayRewriteMessage,
+  buildPlayChoicesPrompt,
   buildPlayStoryboardMessage,
   describeAction,
   emptyWorldState,
   formatScreenplayScene,
   locationFromNarrativeHeader,
   narrativeFromScreenplay,
-  NarrativeStreamParser,
   projectWorldState,
   pickSessionTurn,
   publicAssetPath,
   resolvePlayerAction,
+  PLAY_NOVEL_CHAPTER_CHARS,
   resolvePlayChoices,
   sceneIdFromScreenplay,
   scriptHasScene,
@@ -186,6 +200,8 @@ export async function narrateSession(
   body: { mode?: unknown; choice_id?: unknown; text?: unknown },
   onDelta: (text: string) => Promise<void> | void,
 ) {
+  // 章节按火宝小说整章写完再落库。游玩页只展示落库正文，不把半截草稿推到页面上。
+  void onDelta
   // 占坑必须发生在 await 之前。两个开场请求若都先越过检查再等待读档,
   // 会各跑一遍 Agent;失败时页面会连着弹出两次「这一幕没有写完」。
   if (actingSessions.has(sessionId)) throw new Error('这一幕还在书写，请稍候')
@@ -197,48 +213,35 @@ export async function narrateSession(
 
     const turnIndex = loaded.turns.length + 1
     const actionLine = describeAction(resolved.action, loaded.latestChoices)
-    const episode = await readEpisode(loaded.session.episodeId)
-    const parser = new NarrativeStreamParser()
-    const run = await runStudioAgent({
-      agentType: 'script_rewriter',
-      episodeId: loaded.session.episodeId,
-      dramaId: loaded.session.dramaId,
-      maxSteps: 10,
-      message: buildPlayRewriteMessage({
-        worldTitle: loaded.world.title,
-        genre: loaded.world.genre || '',
-        premise: loaded.world.premise,
-        actionLine,
-        turnIndex,
-        existingScript: episode?.scriptContent || '',
-        recent: loaded.recent,
-      }),
-      onTextDelta: async (delta) => {
-        const visible = parser.push(delta)
-        if (visible) await onDelta(visible)
-      },
-    })
-    parser.absorbFinalText(run.text || '')
-    const finished = parser.finish()
-    if (finished.tail) await onDelta(finished.tail)
-    const savedEpisode = await readEpisode(loaded.session.episodeId)
-    const choices = resolvePlayChoices([
-      finished.stateRaw,
-      finished.rawNarrative,
-      savedEpisode?.scriptContent || '',
-    ])
-    await commitScreenplay(loaded, turnIndex, resolved.action, finished.rawNarrative)
+    const narrative = await writeNovelChapter(loaded, turnIndex, actionLine)
+    if (!narrative) throw new Error('这一幕没有写完，请再试一次')
+    let choiceSource = ''
+    try {
+      choiceSource = await completeNovelPrompt(buildPlayChoicesPrompt(narrative))
+    } catch (error) {
+      console.error('[rpg] choices', error instanceof Error ? error.message : error)
+    }
+    try {
+      await runStudioAgent({
+        agentType: 'script_rewriter',
+        episodeId: loaded.session.episodeId,
+        dramaId: loaded.session.dramaId,
+        maxSteps: 10,
+        message: STUDIO_SCRIPT_REWRITE_MESSAGE,
+      })
+    } catch (error) {
+      console.error('[rpg] script_rewriter', error instanceof Error ? error.message : error)
+    }
+    await commitScreenplay(loaded, turnIndex, resolved.action, narrative)
     const scriptEpisode = await readEpisode(loaded.session.episodeId)
     const script = scriptEpisode?.scriptContent || ''
-    const narrative = finished.narrative || narrativeFromScreenplay(script, turnIndex)
-    if (!narrative) throw new Error('这一幕没有写完，请再试一次')
+    const choices = resolvePlayChoices([choiceSource, script])
     await syncAssets(loaded.session.episodeId, loaded.session.dramaId)
     scheduleEpisodeAssetImages(loaded.session.dramaId, loaded.session.episodeId)
     const assets = await loadEpisodeAssets(loaded.session.dramaId, loaded.session.episodeId)
     const preferredSceneId = sceneIdFromScreenplay(script, turnIndex, assets.scenes)
     const projected = projectWorldState(loaded.state, assets, preferredSceneId)
     const turn = await persistTurn(loaded, resolved.action, narrative, choices, projected.state, projected.sceneId)
-    await appendManuscript(loaded.session.episodeId, turnIndex, resolved.action, narrative)
     return serializeTurn(turn)
   } finally {
     actingSessions.delete(sessionId)
@@ -386,15 +389,94 @@ async function commitScreenplay(
   }).where(eq(schema.episodes.id, episode.id))
 }
 
-async function appendManuscript(episodeId: number, turnIndex: number, action: ResolvedAction, narrative: string) {
-  const episode = await readEpisode(episodeId)
-  if (!episode) return
-  const playerLine = action.mode === 'opening' ? '' : `\n玩家：${action.text}`
-  const content = `${episode.content || ''}\n\n【第${turnIndex}幕】${playerLine}\n${narrative}\n`
-  await db.update(schema.episodes).set({
-    content,
+const NOVEL_PLAYER_GUIDANCE = '正文使用第一人称「我」，「我」是故事主角。设定里的「你」是在向读者介绍主角。'
+
+function novelProjectForWorld(world: { title: string; premise: string; genre: string | null; tagline: string | null }): NovelProject {
+  return createNovelProject({
+    title: world.title,
+    topic: world.premise,
+    genre: world.genre || '其他',
+    wordNumber: PLAY_NOVEL_CHAPTER_CHARS,
+    userGuidance: [world.tagline || '', NOVEL_PLAYER_GUIDANCE].filter(Boolean).join('\n'),
+  })
+}
+
+function readNovelProject(raw: string | null | undefined, world: { title: string; premise: string; genre: string | null; tagline: string | null }): NovelProject {
+  const seed = novelProjectForWorld(world)
+  if (!raw) return seed
+  try {
+    const parsed = JSON.parse(raw) as Partial<NovelProject>
+    if (!parsed || typeof parsed !== 'object') return seed
+    return {
+      ...seed,
+      ...parsed,
+      chapters: parsed.chapters && typeof parsed.chapters === 'object' ? parsed.chapters : {},
+      userGuidance: parsed.userGuidance || seed.userGuidance,
+    }
+  } catch {
+    return seed
+  }
+}
+
+async function saveNovelProject(sessionId: number, project: NovelProject) {
+  await db.update(schema.rpgSessions).set({
+    novelState: JSON.stringify(project),
     updatedAt: now(),
-  }).where(eq(schema.episodes.id, episodeId))
+  }).where(eq(schema.rpgSessions.id, sessionId))
+}
+
+async function writeNovelChapter(loaded: PlayContext, turnIndex: number, actionLine: string): Promise<string> {
+  const baseGuidance = loaded.novel.userGuidance
+  const guidedGuidance = [baseGuidance, actionLine].filter(Boolean).join('\n\n')
+  let project = loaded.novel
+  if (!project.architectureGenerated || !project.plotArchitecture) {
+    project = await generateArchitecture(
+      { ...project, userGuidance: guidedGuidance },
+      completeNovelPrompt,
+      async (partial) => {
+        await saveNovelProject(loaded.session.id, { ...partial, userGuidance: baseGuidance })
+      },
+    )
+    project = { ...project, userGuidance: baseGuidance }
+    await saveNovelProject(loaded.session.id, project)
+  }
+  if (maxBlueprintChapter(project.chapterBlueprint) < turnIndex) {
+    const blueprint = await appendChapterBlueprint(
+      { ...project, userGuidance: guidedGuidance },
+      maxBlueprintChapter(project.chapterBlueprint) + 1,
+      turnIndex,
+      completeNovelPrompt,
+    )
+    if (!parseChapterBlueprint(blueprint).some(chapter => chapter.number === turnIndex)) {
+      throw new Error(`章节大纲没有解析出第 ${turnIndex} 章`)
+    }
+    project = { ...project, chapterBlueprint: blueprint, blueprintGenerated: true }
+    await saveNovelProject(loaded.session.id, project)
+  }
+  const chapterText = await generateChapterDraft(
+    { ...project, userGuidance: guidedGuidance },
+    turnIndex,
+    completeNovelPrompt,
+  )
+  const narrative = visibleNarrative(chapterText)
+  if (!narrative) throw new Error('这一幕没有写完，请再试一次')
+  try {
+    const finalized = await finalizeChapter(project, turnIndex, narrative, completeNovelPrompt)
+    project = { ...project, ...finalized }
+  } catch (error) {
+    console.error('[rpg] novel finalize', error instanceof Error ? error.message : error)
+  }
+  project = {
+    ...project,
+    chapters: { ...project.chapters, [String(turnIndex)]: narrative },
+    userGuidance: baseGuidance,
+  }
+  await saveNovelProject(loaded.session.id, project)
+  await db.update(schema.episodes).set({
+    content: exportNovelToText(project),
+    updatedAt: now(),
+  }).where(eq(schema.episodes.id, loaded.session.episodeId))
+  return narrative
 }
 
 async function syncAssets(episodeId: number, dramaId: number) {
@@ -663,7 +745,7 @@ interface PlayContext {
   turns: Array<typeof schema.rpgTurns.$inferSelect>
   state: RpgWorldState
   latestChoices: RpgChoice[]
-  recent: string
+  novel: NovelProject
 }
 
 function turnForMedia(loaded: PlayContext, turnId: number | undefined, emptyMessage: string) {
@@ -681,17 +763,13 @@ async function loadPlay(sessionId: number): Promise<PlayContext> {
     .where(eq(schema.rpgTurns.sessionId, sessionId))
     .orderBy(asc(schema.rpgTurns.turnIndex))
   const latest = turns[turns.length - 1]
-  const recent = turns.slice(-4).map(turn => {
-    const player = turn.playerText ? `玩家：${turn.playerText}\n` : ''
-    return `第${turn.turnIndex}幕\n${player}${visibleNarrative(turn.narrative)}`
-  }).join('\n\n')
   return {
     session,
     world,
     turns,
     state: parseJson<RpgWorldState>(session.worldState, emptyWorldState(world.premise)),
     latestChoices: latest ? parseJson<RpgChoice[]>(latest.choices, []) : [],
-    recent,
+    novel: readNovelProject(session.novelState, world),
   }
 }
 
