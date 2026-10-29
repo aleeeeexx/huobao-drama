@@ -1,6 +1,6 @@
 /**
  * 火宝小说（chatfire-AI/huobao-novel）的生成编排。
- * 步骤、提示词和章节衔接与原项目一致：架构 → 分块大纲 → 章节草稿 → 定稿摘要与角色状态。
+ * 步骤和提示词与原项目一致：架构（含角色状态）→ 整本大纲（一次写完或按 max_tokens 分块）→ 章节草稿 → 字数不足则扩写 → 定稿摘要与角色状态。
  * 模型调用由调用方注入。火宝小说用独立的 chat/completions；织界改走短剧已配置的文本模型。
  */
 import { architecturePrompts, type NovelPromptParams } from './architecture.js'
@@ -15,9 +15,11 @@ const {
   characterState: createCharacterStatePrompt,
 } = architecturePrompts
 const {
+  blueprint: chapterBlueprintPrompt,
   blueprintChunked: chunkedChapterBlueprintPrompt,
   firstDraft: firstChapterDraftPrompt,
   nextDraft: nextChapterDraftPrompt,
+  enrich: enrichChapterPrompt,
 } = chapterPrompts
 const { summary: summaryPrompt, updateCharacterState: updateCharacterStatePrompt } = utilityPrompts
 
@@ -27,6 +29,13 @@ export const NOVEL_DEFAULT_CHAPTER_COUNT = 100
 export const NOVEL_DEFAULT_WORD_NUMBER = 3000
 /** 后续章节只贴前章结尾，原项目是截取最后 800 字。 */
 export const NOVEL_CHAPTER_EXCERPT_CHARS = 800
+/** 火宝小说设置页默认 max_tokens。大纲分块宽度按请求实际使用的 max_tokens 计算，缺省时用这个值。 */
+export const NOVEL_SETTINGS_MAX_TOKENS = 8192
+/** 织界章节请求的输出上限。3000 字不能被设置页默认的 8192 截断；大纲分块按这个实际上限计算。 */
+export const NOVEL_MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 16384)
+/** 分块大纲提示词只附带最近这么多章。原项目写死 100。 */
+export const NOVEL_BLUEPRINT_RECENT_LIMIT = 100
+const NOVEL_BLUEPRINT_TOKENS_PER_CHAPTER = 200
 
 export type NovelComplete = (prompt: string) => Promise<string>
 
@@ -109,6 +118,22 @@ export function maxBlueprintChapter(blueprint: string): number {
   return Math.max(...existing.map(item => Number(item.match(/\d+/)?.[0] || 0)))
 }
 
+/** 与火宝小说 generateChapterBlueprint 相同：每章预留 200 token，再按十章取整减 10。 */
+export function blueprintChunkSize(maxTokens: number | null | undefined, numberOfChapters: number): number {
+  const tokens = maxTokens || NOVEL_SETTINGS_MAX_TOKENS
+  const rounded = Math.floor(tokens / NOVEL_BLUEPRINT_TOKENS_PER_CHAPTER / 10) * 10 - 10
+  return Math.max(1, Math.min(rounded, numberOfChapters))
+}
+
+export function architectureIncomplete(project: NovelProject): boolean {
+  return !project.architectureGenerated
+    || !project.coreSeed
+    || !project.characterDynamics
+    || !project.characterState
+    || !project.worldBuilding
+    || !project.plotArchitecture
+}
+
 export function buildNovelArchitecture(project: NovelProject): string {
   return `
 #=== 0) 小说设定 ===
@@ -136,6 +161,10 @@ export function limitChapterBlueprint(blueprint: string, limit: number): string 
   return chapters.slice(-limit).join('\n\n').trim()
 }
 
+/**
+ * 解析大纲。字段名沿用火宝小说 generator.js：读取「悬念密度 / 认知颠覆」，
+ * 不是大纲提示词里的「情感强度 / 情节张力」。
+ */
 export function parseChapterBlueprint(blueprint: string): NovelChapterInfo[] {
   if (!blueprint) return []
   const chapters: NovelChapterInfo[] = []
@@ -239,13 +268,58 @@ export async function appendChapterBlueprint(
     userGuidance: project.userGuidance || '',
     novelArchitecture: buildNovelArchitecture(project),
     numberOfChapters: project.numberOfChapters,
-    chapterList: limitChapterBlueprint(project.chapterBlueprint, 100),
+    chapterList: limitChapterBlueprint(project.chapterBlueprint, NOVEL_BLUEPRINT_RECENT_LIMIT),
     startChapter,
     endChapter,
   }))
   const chunk = cleanResponse(await complete(prompt))
   if (!chunk) return project.chapterBlueprint
   return project.chapterBlueprint ? `${project.chapterBlueprint}\n\n${chunk}` : chunk
+}
+
+export interface BlueprintGenerationOptions {
+  /** 本次大纲请求的 max_tokens。决定一次写完还是分块，以及每块多少章。 */
+  maxTokens?: number
+  onPartial?: (blueprint: string) => Promise<void> | void
+}
+
+/**
+ * 生成整本大纲。目录还空着、且一块就放得下全部章节时，用一次性 blueprint；
+ * 否则从已有最大章号的下一章起，按 chunkSize 调用 blueprintChunked，直到 numberOfChapters。
+ */
+export async function generateChapterBlueprint(
+  project: NovelProject,
+  complete: NovelComplete,
+  options: BlueprintGenerationOptions = {},
+): Promise<string> {
+  const numberOfChapters = project.numberOfChapters
+  const novelArchitecture = buildNovelArchitecture(project)
+  const chunkSize = blueprintChunkSize(options.maxTokens, numberOfChapters)
+  let blueprint = project.chapterBlueprint || ''
+
+  if (chunkSize >= numberOfChapters && !blueprint) {
+    blueprint = cleanResponse(await complete(chapterBlueprintPrompt(promptParams({
+      userGuidance: project.userGuidance,
+      novelArchitecture,
+      numberOfChapters,
+    }))))
+    await options.onPartial?.(blueprint)
+    return blueprint
+  }
+
+  let startChapter = maxBlueprintChapter(blueprint) + 1
+  while (startChapter <= numberOfChapters) {
+    const endChapter = Math.min(startChapter + chunkSize - 1, numberOfChapters)
+    blueprint = await appendChapterBlueprint(
+      { ...project, chapterBlueprint: blueprint },
+      startChapter,
+      endChapter,
+      complete,
+    )
+    await options.onPartial?.(blueprint)
+    startChapter = endChapter + 1
+  }
+  return blueprint
 }
 
 const MISSING_NEXT_CHAPTER: NovelChapterInfo = {
@@ -324,6 +398,19 @@ export async function generateChapterDraft(
   return cleanResponse(await complete(prompt))
 }
 
+/** 扩写章节。原项目是写章面板上的「扩写」按钮，提示词只接收正文和目标字数。 */
+export async function enrichChapter(
+  chapterText: string,
+  wordNumber: number,
+  complete: NovelComplete,
+): Promise<string> {
+  const enrichedText = cleanResponse(await complete(enrichChapterPrompt(promptParams({
+    chapterText,
+    wordNumber,
+  }))))
+  return enrichedText || chapterText
+}
+
 /** 章节定稿：更新前文摘要和角色状态。这两次调用和原项目 finalizeChapter 相同。 */
 export async function finalizeChapter(
   project: NovelProject,
@@ -368,4 +455,119 @@ export function exportNovelToText(project: NovelProject): string {
     lines.push('')
   }
   return lines.join('\n')
+}
+
+/** 导出小说为 Markdown。游玩原稿仍用纯文本，制作台读取的是这份 txt 结构。 */
+export function exportNovelToMarkdown(project: NovelProject): string {
+  const lines: string[] = []
+  lines.push(`# ${project.title}`)
+  lines.push('')
+  lines.push(`> **类型**：${formatGenre(project.genre)}`)
+  lines.push(`> **主题**：${project.topic}`)
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+  const chapterNums = Object.keys(project.chapters || {}).map(Number).filter(item => item > 0).sort((a, b) => a - b)
+  const blueprintChapters = parseChapterBlueprint(project.chapterBlueprint)
+  for (const num of chapterNums) {
+    const info = blueprintChapters.find(item => item.number === num)
+    const title = info?.title || `第${num}章`
+    lines.push(`## 第${num}章 ${title}`)
+    lines.push('')
+    lines.push(project.chapters[String(num)] || '')
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
+export interface NovelChapterProductionOptions {
+  /** 大纲请求的 max_tokens，同时决定一次性生成还是分块。 */
+  maxTokens?: number
+  /**
+   * 只注入这一章草稿的用户指导。
+   * 不写回项目，也不进入架构和大纲。织界用它放进本回合的玩家行动。
+   */
+  chapterUserGuidance?: string
+  /** 草稿和扩写结果交给玩家之前的整理。缺省则原样保留模型正文。 */
+  normalizeChapterText?: (text: string) => string
+  onProject?: (project: NovelProject) => Promise<void> | void
+}
+
+/**
+ * 把火宝小说写一章的按钮按顺序跑完：缺的架构（核心种子 → 角色动力学 → 角色状态 → 世界观 → 情节）→
+ * 还没覆盖完全书的大纲 → 草稿 → 正文短于目标字数时扩写一次 → 定稿。
+ * 定稿或扩写失败时仍留下草稿，避免这一章白写。灵感罗盘不在这里：下一章草稿不读图谱。
+ */
+export async function produceNovelChapter(
+  project: NovelProject,
+  chapterNumber: number,
+  complete: NovelComplete,
+  options: NovelChapterProductionOptions = {},
+): Promise<{ project: NovelProject; chapterText: string }> {
+  let next: NovelProject = { ...project, chapters: { ...project.chapters } }
+  const persist = async () => {
+    await options.onProject?.(next)
+  }
+  const normalize = options.normalizeChapterText ?? ((text: string) => text)
+
+  if (architectureIncomplete(next)) {
+    next = await generateArchitecture(next, complete, async (partial) => {
+      next = { ...partial, chapters: { ...partial.chapters } }
+      await persist()
+    })
+    await persist()
+  }
+
+  if (maxBlueprintChapter(next.chapterBlueprint) < next.numberOfChapters) {
+    const blueprint = await generateChapterBlueprint(next, complete, {
+      maxTokens: options.maxTokens,
+      onPartial: async (partialBlueprint) => {
+        next = {
+          ...next,
+          chapterBlueprint: partialBlueprint,
+          blueprintGenerated: maxBlueprintChapter(partialBlueprint) >= next.numberOfChapters,
+        }
+        await persist()
+      },
+    })
+    next = {
+      ...next,
+      chapterBlueprint: blueprint,
+      blueprintGenerated: maxBlueprintChapter(blueprint) >= next.numberOfChapters,
+    }
+    await persist()
+  } else if (!next.blueprintGenerated) {
+    next = { ...next, blueprintGenerated: true }
+    await persist()
+  }
+
+  const draftProject = options.chapterUserGuidance !== undefined
+    ? { ...next, userGuidance: options.chapterUserGuidance }
+    : next
+  let chapterText = normalize(await generateChapterDraft(draftProject, chapterNumber, complete))
+  if (!chapterText.trim()) throw new Error('这一幕没有写完，请再试一次')
+
+  if (chapterText.length < next.wordNumber) {
+    try {
+      const enriched = normalize(await enrichChapter(chapterText, next.wordNumber, complete))
+      if (enriched.trim()) chapterText = enriched
+    } catch (error) {
+      console.error('[novel] enrich', error instanceof Error ? error.message : error)
+    }
+  }
+
+  try {
+    const finalized = await finalizeChapter(next, chapterNumber, chapterText, complete)
+    next = { ...next, ...finalized }
+  } catch (error) {
+    console.error('[novel] finalize', error instanceof Error ? error.message : error)
+  }
+
+  next = {
+    ...next,
+    chapters: { ...next.chapters, [String(chapterNumber)]: chapterText },
+    userGuidance: project.userGuidance,
+  }
+  await persist()
+  return { project: next, chapterText }
 }

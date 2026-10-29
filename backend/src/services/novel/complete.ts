@@ -4,11 +4,10 @@
  */
 import { getTextConfig, getTextProviderBaseUrl } from '../ai.js'
 import { installThinkingOffFetch } from '../../agents/thinking-off.js'
+import { NOVEL_MAX_TOKENS } from './generator.js'
 
 /** 火宝小说设置页的默认温度。文本服务若单独配了温度，以服务配置为准。 */
 const NOVEL_TEMPERATURE = 0.7
-/** 与工作室 Agent 相同的输出上限，保证大约 3000 字的章节不会被默认 8192 截断。 */
-const NOVEL_MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 16384)
 const NOVEL_TIMEOUT_MS = 600_000
 
 export async function completeNovelPrompt(prompt: string): Promise<string> {
