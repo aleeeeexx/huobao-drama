@@ -6,6 +6,8 @@ import {
   assembleStillPrompt,
   buildPlayRewriteMessage,
   buildPlayStoryboardMessage,
+  PLAY_NOVEL_CHAPTER_CHARS,
+  previousChapterExcerpt,
   choicesFromPayload,
   emptyWorldState,
   formatScreenplayScene,
@@ -117,6 +119,14 @@ test('player narrative strips agent pipeline preambles and keeps the story', () 
   assert.equal(stripPipelineMeta('你写下要先看那封信，于是把茶盏翻了过来。'), '你写下要先看那封信，于是把茶盏翻了过来。')
   assert.equal(stripPipelineMeta('我先读取告示上的名字。'), '我先读取告示上的名字。')
   assert.equal(stripPipelineMeta('他调用维修工具，气闸开了一条缝。'), '他调用维修工具，气闸开了一条缝。')
+  assert.equal(
+    stripPipelineMeta('从这一章的第一句写起。篇幅大约 3000 字，不要少于 1800 字。\n\n我推开茶寮的门，掌柜抬起头。"进来吧。"他说。'),
+    '我推开茶寮的门，掌柜抬起头。"进来吧。"他说。',
+  )
+  const chapter = Array.from({ length: 12 }, (_, index) => {
+    return `我在第${index + 1}张桌子前停下。掌柜仍低着头，没有叫我。`
+  }).join('\n\n')
+  assert.equal(visibleNarrative(chapter), chapter)
 
   const parser = new NarrativeStreamParser()
   const preamble = '我先读取本集已有正文，再按你选的走向续写第3幕并保存剧本。残字已经对上，我先把这一幕写入剧本，再把给你看的正文补上。'
@@ -352,7 +362,7 @@ test('play still and video prompts keep the live-action cinema style', () => {
   const rewrite = buildPlayRewriteMessage({
     worldTitle: '雾隐茶寮',
     genre: '悬疑',
-    premise: '雨夜的茶寮。',
+    premise: '雨夜的茶寮。你是刚回来的记者。',
     actionLine: '玩家选择了剧情走向：「推门进去」',
     turnIndex: 2,
     existingScript: '## S1 | 外景 · 巷口 | 夜',
@@ -361,9 +371,46 @@ test('play still and video prompts keep the live-action cinema style', () => {
   assert.match(rewrite, /read_episode_script/)
   assert.match(rewrite, /save_script/)
   assert.match(rewrite, /script_rewriter|剧本改写/)
-  assert.match(rewrite, /从故事的第一句写起/)
+  assert.match(rewrite, /从这一章的第一句写起/)
+  assert.match(rewrite, /第一人称「我」/)
+  assert.match(rewrite, new RegExp(String(PLAY_NOVEL_CHAPTER_CHARS)))
+  assert.match(rewrite, /至少两场戏/)
+  assert.match(rewrite, /前章结尾/)
+  assert.match(rewrite, /你站在门外/)
+  assert.match(rewrite, /30-60 秒/)
   assert.match(rewrite, /不要输出任何文字/)
+  assert.match(rewrite, /"choices"/)
+  assert.doesNotMatch(rewrite, /280 到 420/)
+  assert.doesNotMatch(rewrite, /第二人称/)
+  assert.doesNotMatch(rewrite, /一段或两段/)
   assert.doesNotMatch(rewrite, /chat\/completions/)
+  const opening = buildPlayRewriteMessage({
+    worldTitle: '雾隐茶寮',
+    genre: '悬疑',
+    premise: '雨夜的茶寮。',
+    actionLine: '请写下第一章正文，把主角放进世界。',
+    turnIndex: 1,
+    existingScript: '',
+    recent: '',
+  })
+  assert.match(opening, /这是第一章/)
+  assert.doesNotMatch(opening, /前章结尾/)
+  const early = '甲'.repeat(800)
+  const ending = '灯花爆了一下。我把那半张纸按回杯底。'
+  const excerpt = previousChapterExcerpt(`${early}${ending}`)
+  assert.equal(excerpt.includes('灯花爆了一下'), true)
+  assert.equal(excerpt.includes(early), false)
+  const continued = buildPlayRewriteMessage({
+    worldTitle: '雾隐茶寮',
+    genre: '悬疑',
+    premise: '雨夜的茶寮。',
+    actionLine: '玩家写下了自己的行动：「翻开杯子」',
+    turnIndex: 3,
+    existingScript: '## S2 | 内景 · 茶寮 | 夜',
+    recent: `${early}${ending}`,
+  })
+  assert.match(continued, /灯花爆了一下/)
+  assert.equal(continued.includes(early), false)
   const storyboard = buildPlayStoryboardMessage({
     turnIndex: 2,
     narrative: '你推开了门。',
