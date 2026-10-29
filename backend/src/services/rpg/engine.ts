@@ -1,6 +1,6 @@
 /**
  * 织界对局编排。
- * 玩家看到的章节走火宝小说的架构、大纲、草稿和定稿。
+ * 玩家看到的章节走火宝小说的架构、整本大纲、草稿、字数不足时的扩写和定稿。
  * 短剧剧本是下一步：script_rewriter 按制作台原句把原稿改成剧本。
  * extractor 同步资产，插画用 prompt_generator 的场景提示词，
  * 影像用 storyboard_breaker 追加本幕分镜，再由 prompt_generator 写视频提示词。
@@ -30,14 +30,10 @@ import { videoModelLabel, writeStoryboardVideoPrompt } from '../video-prompts.js
 import { runStudioAgent } from '../agent-runner.js'
 import { completeNovelPrompt } from '../novel/complete.js'
 import {
-  appendChapterBlueprint,
   createNovelProject,
   exportNovelToText,
-  finalizeChapter,
-  generateArchitecture,
-  generateChapterDraft,
-  maxBlueprintChapter,
-  parseChapterBlueprint,
+  NOVEL_MAX_TOKENS,
+  produceNovelChapter,
   type NovelProject,
 } from '../novel/generator.js'
 import { STUDIO_SCRIPT_REWRITE_MESSAGE } from '../studio-script.js'
@@ -426,57 +422,21 @@ async function saveNovelProject(sessionId: number, project: NovelProject) {
 }
 
 async function writeNovelChapter(loaded: PlayContext, turnIndex: number, actionLine: string): Promise<string> {
-  const baseGuidance = loaded.novel.userGuidance
-  const guidedGuidance = [baseGuidance, actionLine].filter(Boolean).join('\n\n')
-  let project = loaded.novel
-  if (!project.architectureGenerated || !project.plotArchitecture) {
-    project = await generateArchitecture(
-      { ...project, userGuidance: guidedGuidance },
-      completeNovelPrompt,
-      async (partial) => {
-        await saveNovelProject(loaded.session.id, { ...partial, userGuidance: baseGuidance })
-      },
-    )
-    project = { ...project, userGuidance: baseGuidance }
-    await saveNovelProject(loaded.session.id, project)
-  }
-  if (maxBlueprintChapter(project.chapterBlueprint) < turnIndex) {
-    const blueprint = await appendChapterBlueprint(
-      { ...project, userGuidance: guidedGuidance },
-      maxBlueprintChapter(project.chapterBlueprint) + 1,
-      turnIndex,
-      completeNovelPrompt,
-    )
-    if (!parseChapterBlueprint(blueprint).some(chapter => chapter.number === turnIndex)) {
-      throw new Error(`章节大纲没有解析出第 ${turnIndex} 章`)
-    }
-    project = { ...project, chapterBlueprint: blueprint, blueprintGenerated: true }
-    await saveNovelProject(loaded.session.id, project)
-  }
-  const chapterText = await generateChapterDraft(
-    { ...project, userGuidance: guidedGuidance },
-    turnIndex,
-    completeNovelPrompt,
-  )
-  const narrative = visibleNarrative(chapterText)
-  if (!narrative) throw new Error('这一幕没有写完，请再试一次')
-  try {
-    const finalized = await finalizeChapter(project, turnIndex, narrative, completeNovelPrompt)
-    project = { ...project, ...finalized }
-  } catch (error) {
-    console.error('[rpg] novel finalize', error instanceof Error ? error.message : error)
-  }
-  project = {
-    ...project,
-    chapters: { ...project.chapters, [String(turnIndex)]: narrative },
-    userGuidance: baseGuidance,
-  }
-  await saveNovelProject(loaded.session.id, project)
+  const chapterUserGuidance = [loaded.novel.userGuidance, actionLine].filter(Boolean).join('\n\n')
+  const produced = await produceNovelChapter(loaded.novel, turnIndex, completeNovelPrompt, {
+    maxTokens: NOVEL_MAX_TOKENS,
+    chapterUserGuidance,
+    normalizeChapterText: visibleNarrative,
+    onProject: async (partial) => {
+      await saveNovelProject(loaded.session.id, partial)
+    },
+  })
+  if (!produced.chapterText.trim()) throw new Error('这一幕没有写完，请再试一次')
   await db.update(schema.episodes).set({
-    content: exportNovelToText(project),
+    content: exportNovelToText(produced.project),
     updatedAt: now(),
   }).where(eq(schema.episodes.id, loaded.session.episodeId))
-  return narrative
+  return produced.chapterText
 }
 
 async function syncAssets(episodeId: number, dramaId: number) {
