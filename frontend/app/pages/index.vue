@@ -6,6 +6,7 @@
       <p class="lede">
         选一个世界，或自己写下设定。故事一幕一幕往下长。每一幕都会给出剧情走向，你也可以不选，直接写下你要做的事。看中的场面可以画成插画，再拍成一段影像。
       </p>
+      <button class="btn novel-entry" type="button" @click="navigateTo('/novel')">去写小说</button>
     </header>
 
     <section v-if="loading" class="world-grid">
@@ -150,6 +151,7 @@ onMounted(async () => {
   letter-spacing: -0.03em;
 }
 .lede { max-width: 680px; color: var(--text-2); font-size: 15px; line-height: 1.7; }
+.novel-entry { margin-top: 16px; }
 .world-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
