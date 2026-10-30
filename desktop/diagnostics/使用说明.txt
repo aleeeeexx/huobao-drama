@@ -1,6 +1,6 @@
-火宝短剧 Windows 启动诊断
+幻书 Windows 启动诊断
 
-这是诊断工具，不是安装包，适用于已经安装但打不开的火宝短剧。
+这是诊断工具，不是安装包，适用于已经安装但打不开的幻书。
 
 1. 将整个压缩包解压到一个文件夹，不要直接在压缩包里运行。
 2. 双击 windows-diagnostics.cmd，等待约 15 秒。
@@ -8,7 +8,7 @@
 4. 把这个文件夹压缩后发给开发者。
 
 如果提示 Application not found：
-右键火宝短剧快捷方式，选择“打开文件所在的位置”。
+右键幻书快捷方式，选择“打开文件所在的位置”。
 把 windows-diagnostics.cmd 和 windows-diagnostics.ps1 一起放到 HuobaoDrama.exe 旁，再双击 CMD。
 也可以把实际的 HuobaoDrama.exe 拖到 windows-diagnostics.cmd 上。
 

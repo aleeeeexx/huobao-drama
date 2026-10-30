@@ -5,11 +5,11 @@
       <div class="header-left">
         <button class="brand" @click="navigateTo('/')">
           <div class="brand-mark">
-            <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="brand-logo" @error="showBrandImage = false" />
-            <span v-else class="brand-fallback">火</span>
+            <img v-if="showBrandImage" :src="brandLogo" alt="幻书" class="brand-logo" @error="showBrandImage = false" />
+            <span v-else class="brand-fallback">幻</span>
           </div>
           <div class="brand-text">
-            <span class="brand-name">火宝短剧</span>
+            <span class="brand-name">幻书</span>
             <span class="brand-sub">织界</span>
           </div>
         </button>

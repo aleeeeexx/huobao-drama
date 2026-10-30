@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "Huobao Shorts",
+    "title": "幻书",
     "updateAvailable": "New version v{version} is available. Upgrade in Settings → About."
   },
   "common": {
@@ -899,7 +899,7 @@
     "helpTitle": "Guide",
     "index": {
       "welcome": {
-        "title": "👋 Welcome to Huobao Drama",
+        "title": "👋 Welcome to 幻书",
         "desc": "Novel → script → assets → storyboard → video → final cut, all in one place. Configure AI services first, then create your first project."
       },
       "create": {

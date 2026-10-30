@@ -32,7 +32,7 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: '火宝短剧',
+      title: '幻书',
       meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
       link: [
         // v 参数用于 favicon 缓存穿透（浏览器对 favicon 缓存独立于 HTTP 缓存，换图必须 bump）

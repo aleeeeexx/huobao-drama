@@ -3,7 +3,7 @@
   "productName": "HuobaoDrama",
   "version": "4.0.9",
   "private": true,
-  "description": "火宝短剧桌面版（Electron 壳）",
+  "description": "幻书桌面版（Electron 壳）",
   "author": "Huobao",
   "main": "dist/main.js",
   "scripts": {

@@ -50,7 +50,7 @@ try {
   fs.mkdirSync(userDataDir, { recursive: true })
   app.setPath('userData', userDataDir)
 } catch (error) {
-  dialog.showErrorBox('火宝短剧启动失败', `无法准备用户目录：${userDataDir}\n${(error as Error).message}`)
+  dialog.showErrorBox('幻书启动失败', `无法准备用户目录：${userDataDir}\n${(error as Error).message}`)
   app.exit(1)
 }
 
@@ -63,7 +63,7 @@ function failStartup(error: unknown) {
   const message = redactStartupLog(error instanceof Error ? error.message : error)
   startupLog.write(`fatal: ${error instanceof Error ? error.stack : error}`)
   showMainWindow()
-  dialog.showErrorBox('火宝短剧启动失败', `${message}\n\n启动日志：${startupLog.file}\n请将此日志发给技术支持，无需删除项目数据。`)
+  dialog.showErrorBox('幻书启动失败', `${message}\n\n启动日志：${startupLog.file}\n请将此日志发给技术支持，无需删除项目数据。`)
   app.quit()
 }
 process.on('uncaughtException', failStartup)
@@ -249,7 +249,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    title: '火宝短剧',
+    title: '幻书',
     show: true,
     backgroundColor: '#f6f7fb',
     webPreferences: {

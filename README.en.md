@@ -1,4 +1,4 @@
-# 🎬 Huobao Drama - AI Short Drama Generation Platform
+# 🎬 幻书 - AI Short Drama Generation Platform
 
 <div align="center">
 
@@ -28,7 +28,7 @@ After deploying, paste the key in "Settings → Huobao Quick Setup" to write thr
 
 ## 📖 Overview
 
-Huobao Drama is an AI-powered short-drama production platform that automates the entire pipeline: script generation, character design, storyboard breakdown, and video compositing.
+幻书 is an AI-powered short-drama production platform that automates the entire pipeline: script generation, character design, storyboard breakdown, and video compositing.
 
 ### 🎯 Core Value
 

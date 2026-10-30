@@ -90,7 +90,7 @@ app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 const port = Number(process.env.PORT || 5679)
 await bootstrapCodeccConfigs()
 await bootstrapGrsaiConfigs()
-console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
+console.log(`🚀 幻书 TS server on http://localhost:${port}`)
 
 await resumeInterruptedTasks()
 
