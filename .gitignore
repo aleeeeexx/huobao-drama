@@ -52,6 +52,9 @@ backend/workspace/*
 !backend/workspace/skills/
 !backend/workspace/prompts/
 
+# Side novel module database
+ai-novel/data/
+
 # Desktop (Electron) build artifacts
 desktop/node_modules/
 desktop/build/

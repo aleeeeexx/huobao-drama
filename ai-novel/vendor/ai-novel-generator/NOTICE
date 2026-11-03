@@ -1,0 +1,13 @@
+本目录是 YILING0013/AI_NovelGenerator（main）的片段，不是织界原创。
+
+来源：https://github.com/YILING0013/AI_NovelGenerator
+提交：a61674fad4dd6c4c5fa9a2ad2f12b667109e628a
+许可证：GNU Affero General Public License v3.0，全文见同目录 LICENSE。
+
+纳入范围仅限默认建书任务 `create_novel_by_ai`：
+- defaults/create_novel_by_ai.json
+- 该图引用的 prompt / text_prompt / schema_prompt
+
+`ai-novel/` 用 Node 执行这张图，结果写入本模块自己的 SQLite。上游完整程序（FastAPI、MongoDB 副本集、Next.js、PySide6）不在本目录。织界原有 `/novel` 与 `/play` 不使用这些文件。
+
+修改或通过网络提供这些提示词与任务图时，请遵守 AGPL v3.0，包括向用户提供对应源代码。
