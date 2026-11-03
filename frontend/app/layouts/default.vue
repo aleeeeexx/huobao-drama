@@ -20,6 +20,10 @@
           <BookOpen :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.play') }}</span>
         </NuxtLink>
+        <NuxtLink to="/novel" class="nav-link" :class="{ active: route.path === '/novel' || route.path.startsWith('/novel/') }">
+          <Feather :size="15" :stroke-width="1.8" />
+          <span>{{ t('layout.nav.novel') }}</span>
+        </NuxtLink>
         <NuxtLink to="/studio" class="nav-link" :class="{ active: route.path === '/studio' || route.path.startsWith('/drama') }">
           <LayoutGrid :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.studio') }}</span>
@@ -60,7 +64,7 @@
 </template>
 
 <script setup>
-import { BookOpen, LayoutGrid, Settings, TriangleAlert, Github } from 'lucide-vue-next'
+import { BookOpen, Feather, LayoutGrid, Settings, TriangleAlert, Github } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { aiConfigAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/brand-logo.png'

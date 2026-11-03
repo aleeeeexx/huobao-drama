@@ -27,6 +27,11 @@ export default defineNuxtConfig({
           path: '/play/:sessionId',
           file: fileURLToPath(new URL('./app/views/rpg/play.vue', import.meta.url)),
         },
+        {
+          name: 'novel-read',
+          path: '/novel/:bookId',
+          file: fileURLToPath(new URL('./app/views/novel/read.vue', import.meta.url)),
+        },
       )
     },
   },

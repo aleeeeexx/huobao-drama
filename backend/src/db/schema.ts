@@ -319,6 +319,8 @@ export const rpgSessions = sqliteTable('rpg_sessions', {
   worldState: text('world_state').notNull(),
   /** 火宝小说项目：架构、大纲、章节正文、前文摘要、角色状态 */
   novelState: text('novel_state'),
+  /** rpg：互动续写。novel：独立小说创作页。 */
+  playKind: text('play_kind').notNull().default('rpg'),
   turnCount: integer('turn_count').default(0),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),

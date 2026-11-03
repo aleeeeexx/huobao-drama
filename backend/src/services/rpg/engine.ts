@@ -5,7 +5,7 @@
  * extractor 同步资产，插画用 prompt_generator 的场景提示词，
  * 影像用 storyboard_breaker 追加本幕分镜，再由 prompt_generator 写视频提示词。
  */
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, ne } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../../db/index.js'
 import { generateImage, generateVideo } from '../generation.js'
 import { EXTRACT_TARGETS, runExtraction } from '../extraction.js'
@@ -40,6 +40,7 @@ import { STUDIO_SCRIPT_REWRITE_MESSAGE } from '../studio-script.js'
 import { LIVE_ACTION_CINEMATIC_STYLE } from '../live-action-cinematic.js'
 import { now } from '../../utils/response.js'
 import { PRESET_WORLDS, type WorldSeed } from './worlds.js'
+import { NOVEL_PLAY_KIND, RPG_PLAY_KIND } from './play-kind.js'
 import {
   assembleStillPrompt,
   buildPlayChoicesPrompt,
@@ -99,7 +100,10 @@ export async function listWorlds() {
 }
 
 export async function listSessions() {
-  const rows = await db.select().from(schema.rpgSessions).orderBy(desc(schema.rpgSessions.updatedAt)).limit(20)
+  const rows = await db.select().from(schema.rpgSessions)
+    .where(ne(schema.rpgSessions.playKind, NOVEL_PLAY_KIND))
+    .orderBy(desc(schema.rpgSessions.updatedAt))
+    .limit(20)
   return rows.map(row => ({
     id: row.id,
     title: row.title,
@@ -154,6 +158,7 @@ export async function createSession(input: {
     episodeId,
     title: world.title,
     status: 'active',
+    playKind: RPG_PLAY_KIND,
     worldState: JSON.stringify(state),
     turnCount: 0,
     createdAt: ts,
@@ -204,6 +209,7 @@ export async function narrateSession(
   actingSessions.add(sessionId)
   try {
     const loaded = await loadPlay(sessionId)
+    if (loaded.session.playKind === NOVEL_PLAY_KIND) throw new Error('这是一本小说，请到小说创作页写下一章')
     const resolved = resolvePlayerAction(body, loaded.latestChoices, loaded.turns.length > 0)
     if (!resolved.ok) throw new Error(resolved.message)
 

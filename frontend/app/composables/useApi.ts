@@ -179,6 +179,14 @@ export const serverUpdateAPI = {
   apply: () => api.post('/server-update/apply'),
 }
 
+export const novelAPI = {
+  books: () => api.get('/novel/books'),
+  createBook: (data: any) => api.post('/novel/books', data),
+  book: (id: number) => api.get(`/novel/books/${id}`),
+  illustrate: (id: number, chapterNumber: number, body?: { force?: boolean }) => api.post(`/novel/books/${id}/chapters/${chapterNumber}/image`, body),
+  film: (id: number, chapterNumber: number) => api.post(`/novel/books/${id}/chapters/${chapterNumber}/video`, {}),
+}
+
 export const rpgAPI = {
   worlds: () => api.get('/rpg/worlds'),
   sessions: () => api.get('/rpg/sessions'),
