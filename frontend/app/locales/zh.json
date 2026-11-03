@@ -35,9 +35,20 @@
     "nav": {
       "play": "织界",
       "novel": "小说",
+      "novelTitle": "织界里的小说页：按原稿写章节，并挂剧情图和剧情视频",
+      "aiNovel": "AI 建书",
+      "aiNovelTitle": "旁边的建书模块：从创意生成故事方向，不替换上面的小说页",
       "studio": "制作台",
       "projects": "项目",
       "settings": "设置"
+    },
+    "aiNovelPage": {
+      "connecting": "正在打开旁边的建书模块…",
+      "unavailable": "AI 建书暂时没有连上",
+      "hint": "织界启动时会自动拉起这个模块。若刚打开，等几秒再试。仍不行时，在仓库根目录执行下面的命令，然后点重试。",
+      "command": "cd ai-novel && npm start",
+      "retry": "重试",
+      "frameTitle": "AI 建书"
     },
     "banner": {
       "missing": "尚未配置{types}模型,AI 功能无法使用",

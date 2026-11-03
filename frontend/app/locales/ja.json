@@ -35,9 +35,20 @@
     "nav": {
       "play": "織界",
       "novel": "小説",
+      "novelTitle": "織界の小説ページ。原稿から章を書き、物語の絵と動画を付けます",
+      "aiNovel": "AI建書",
+      "aiNovelTitle": "横の建書モジュール。アイデアから物語の方向を作ります。小説ページの代わりではありません",
       "studio": "制作",
       "projects": "プロジェクト",
       "settings": "設定"
+    },
+    "aiNovelPage": {
+      "connecting": "横の建書モジュールを開いています…",
+      "unavailable": "AI建書に接続できません",
+      "hint": "サーバー起動時にこのモジュールも起動します。開いた直後なら数秒待って再試行してください。まだ失敗する場合は、リポジトリのルートで次のコマンドを実行してから再試行してください。",
+      "command": "cd ai-novel && npm start",
+      "retry": "再試行",
+      "frameTitle": "AI建書"
     },
     "banner": {
       "missing": "{types}モデルが未設定のため、AI 機能は使用できません",

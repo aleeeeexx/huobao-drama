@@ -3,7 +3,8 @@
  *
  * 1. frontend/           ← nuxt generate 产物（.output/public，含 index.html）
  * 2. workspace-template/ ← backend/workspace（skills + prompts，首启动拷入 userData）
- * 3. bin-<os>-<arch>/    ← ffmpeg/ffprobe 按平台与架构分目录（electron-builder 宏各取所需，
+ * 3. ai-novel/           ← 顶栏「AI 建书」旁路模块（不含本机书库 data/）
+ * 4. bin-<os>-<arch>/    ← ffmpeg/ffprobe 按平台与架构分目录（electron-builder 宏各取所需，
  *                          避免 mac 包带 exe、win 包带 mac 二进制白白 +144MB）
  */
 import fs from 'fs'
@@ -33,6 +34,23 @@ console.log('resources/frontend ✓')
 const workspaceSrc = path.join(REPO, 'backend', 'workspace')
 fs.cpSync(workspaceSrc, path.join(RES, 'workspace-template'), { recursive: true })
 console.log('resources/workspace-template ✓')
+
+// 3. 旁边的小说模块。data/ 是本机书库，不打进安装包；后端会把书库放到用户数据目录。
+const novelSrc = path.join(REPO, 'ai-novel')
+if (!fs.existsSync(path.join(novelSrc, 'server.mjs'))) {
+  console.error('缺少 ai-novel/server.mjs，无法打包「AI 建书」')
+  process.exit(1)
+}
+fs.cpSync(novelSrc, path.join(RES, 'ai-novel'), {
+  recursive: true,
+  filter: (src) => {
+    const relative = path.relative(novelSrc, src)
+    if (!relative) return true
+    const top = relative.split(path.sep)[0]
+    return top !== 'data' && top !== 'node_modules'
+  },
+})
+console.log('resources/ai-novel ✓')
 
 // 3. macOS 两种架构独立准备；ffprobe-static 的 arm64 目录实际可能含 x64 二进制，
 //    因此两种媒体工具统一使用 ffmpeg-static 对应版本的官方发布产物。
