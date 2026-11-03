@@ -1,0 +1,14 @@
+{
+  "name": "ai-novel",
+  "private": true,
+  "type": "module",
+  "description": "织界旁边的独立小说模块，执行 AI_NovelGenerator 的 create_novel_by_ai 建书流程。",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "SEE LICENSE IN NOTICE"
+}

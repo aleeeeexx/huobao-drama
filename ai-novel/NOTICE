@@ -1,0 +1,5 @@
+本目录是织界仓库里的独立小说模块，执行 AI_NovelGenerator 的默认建书任务图。
+
+提示词与任务图位于 vendor/ai-novel-generator/，来自 https://github.com/YILING0013/AI_NovelGenerator （main，a61674fad4dd6c4c5fa9a2ad2f12b667109e628a），许可证为 GNU AGPL v3.0，全文见该目录 LICENSE。
+
+分发修改后的提示词、建书任务图，或通过网络提供基于这些文件的生成服务时，需要同时满足 AGPL v3.0 的源代码提供义务。织界其余代码仍以仓库根目录 LICENSE（CC BY-NC-SA 4.0）为准。
