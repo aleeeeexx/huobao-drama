@@ -81,8 +81,14 @@
       })[char])
     }
 
+    function mountPrefix() {
+      const pathname = location.pathname.replace(/\/index\.html$/, '')
+      if (pathname === '/' || pathname === '') return ''
+      return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+    }
+
     async function api(path, options) {
-      const response = await fetch(path, options)
+      const response = await fetch(`${mountPrefix()}${path}`, options)
       const payload = await response.json().catch(() => ({}))
       if (!response.ok || payload.ok === false) throw new Error(payload.message || '请求没有完成')
       return payload.data
@@ -198,7 +204,7 @@
     async function generate(id) {
       const book = await api(`/api/books/${id}`)
       renderBook(book, '正在生成故事方向')
-      const response = await fetch(`/api/books/${id}/direction`, { method: 'POST' })
+      const response = await fetch(`${mountPrefix()}/api/books/${id}/direction`, { method: 'POST' })
       if (!response.ok || !response.body) {
         const payload = await response.json().catch(() => ({}))
         throw new Error(payload.message || '故事方向没有生成')

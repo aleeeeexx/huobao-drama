@@ -20,9 +20,13 @@
           <BookOpen :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.play') }}</span>
         </NuxtLink>
-        <NuxtLink to="/novel" class="nav-link" :class="{ active: route.path === '/novel' || route.path.startsWith('/novel/') }">
+        <NuxtLink to="/novel" class="nav-link" :class="{ active: route.path === '/novel' || route.path.startsWith('/novel/') }" :title="t('layout.nav.novelTitle')">
           <Feather :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.novel') }}</span>
+        </NuxtLink>
+        <NuxtLink to="/ai-novel" class="nav-link" :class="{ active: route.path === '/ai-novel' || route.path.startsWith('/ai-novel/') }" :title="t('layout.nav.aiNovelTitle')">
+          <Library :size="15" :stroke-width="1.8" />
+          <span>{{ t('layout.nav.aiNovel') }}</span>
         </NuxtLink>
         <NuxtLink to="/studio" class="nav-link" :class="{ active: route.path === '/studio' || route.path.startsWith('/drama') }">
           <LayoutGrid :size="15" :stroke-width="1.8" />
@@ -64,7 +68,7 @@
 </template>
 
 <script setup>
-import { BookOpen, Feather, LayoutGrid, Settings, TriangleAlert, Github } from 'lucide-vue-next'
+import { BookOpen, Feather, Github, LayoutGrid, Library, Settings, TriangleAlert } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { aiConfigAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/brand-logo.png'
@@ -171,6 +175,8 @@ watch(locale, checkAiConfigs)
   padding: 3px;
   border-radius: var(--radius-pill);
   background: var(--overlay-track);
+  min-width: 0;
+  overflow-x: auto;
 }
 
 /* Header 右侧 — 语言切换器 */
@@ -197,6 +203,7 @@ watch(locale, checkAiConfigs)
 }
 .nav-link {
   display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
   min-height: 32px;
   padding: 0 16px; border-radius: var(--radius-pill);
   font-size: 13px; font-weight: 600;

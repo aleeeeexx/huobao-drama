@@ -35,9 +35,20 @@
     "nav": {
       "play": "플레이",
       "novel": "소설",
+      "novelTitle": "앱 안의 소설 페이지. 원고로 장을 쓰고 이야기 그림과 영상을 붙입니다",
+      "aiNovel": "AI 집필",
+      "aiNovelTitle": "옆의 집필 모듈. 아이디어로 이야기 방향을 만듭니다. 소설 페이지를 대체하지 않습니다",
       "studio": "제작",
       "projects": "프로젝트",
       "settings": "설정"
+    },
+    "aiNovelPage": {
+      "connecting": "옆의 집필 모듈을 여는 중…",
+      "unavailable": "AI 집필에 연결되지 않았습니다",
+      "hint": "서버가 켜질 때 이 모듈도 같이 시작합니다. 방금 열었다면 몇 초 뒤 다시 시도하세요. 그래도 안 되면 저장소 루트에서 아래 명령을 실행한 뒤 다시 시도하세요.",
+      "command": "cd ai-novel && npm start",
+      "retry": "다시 시도",
+      "frameTitle": "AI 집필"
     },
     "banner": {
       "missing": "{types} 모델이 아직 설정되지 않아 AI 기능을 사용할 수 없습니다",
