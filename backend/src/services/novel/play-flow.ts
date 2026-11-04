@@ -1,6 +1,6 @@
 /**
  * 小说创作页的纯逻辑。不访问数据库，方便单测。
- * 写章只调用火宝小说的 produceNovelChapter，不整理正文，也不改提示词。
+ * 写章只调用织界的 produceNovelChapter，不整理正文，也不改提示词。
  */
 import {
   architectureIncomplete,
@@ -27,24 +27,26 @@ export const NOVEL_PLAY_WORDS_MAX = 8000
 export type NovelWritePhase = 'architecture' | 'blueprint' | 'draft' | 'enrich' | 'finalize'
 
 export function phaseForNovelPrompt(prompt: string): NovelWritePhase | null {
-  const text = prompt.trimStart()
-  const head = text.slice(0, 80)
-  const secondLine = text.split('\n')[1] || ''
+  const head = prompt.trimStart().slice(0, 180)
+  if (head.includes('依据当前章计划完成本章正文')) return 'draft'
+  if (head.includes('根据当前场景规划生成章计划')) return 'blueprint'
+  if (
+    head.includes('零散创意')
+    || head.includes('提炼出清晰的小说构思要素')
+    || head.includes('雪花写作法')
+    || head.includes('构建小说的整体设定')
+  ) return 'architecture'
   if (head.startsWith('以下章节文本较短')) return 'enrich'
   if (head.startsWith('以下是新完成的章节文本')) return 'finalize'
   if (head.startsWith('即将创作：') || head.startsWith('参考文档：')) return 'draft'
-  if (head.startsWith('作为专业作家')) return 'architecture'
-  if (head.startsWith('依据当前角色动力学设定')) return 'architecture'
-  if (text.startsWith('基于以下元素') && secondLine.includes('小说类型')) return 'architecture'
-  if (text.startsWith('基于以下元素') && secondLine.includes('内容指导')) return 'blueprint'
   return null
 }
 
 export function novelWritePhase(project: NovelProject, chapterNumber: number): NovelWritePhase {
   if (architectureIncomplete(project)) return 'architecture'
-  if (maxBlueprintChapter(project.chapterBlueprint) < project.numberOfChapters) return 'blueprint'
+  if (maxBlueprintChapter(project.chapterBlueprint) < chapterNumber) return 'blueprint'
   if (!project.chapters[String(chapterNumber)]?.trim()) return 'draft'
-  return 'finalize'
+  return 'draft'
 }
 
 /** 本章额外提示只并进这一章草稿的用户指导。空白时沿用起书时的指导，不替换提示词。 */
@@ -135,7 +137,7 @@ export interface WriteOriginalChapterOptions {
 }
 
 /**
- * 按火宝小说写一章。缺架构就补到角色状态和情节，缺大纲就写满全书，再草稿、扩写、定稿。
+ * 按织界流水线写一章。缺设定就补设定，缺这一章的计划就补计划，然后写正文。
  * 不传入正文整理函数，模型返回的原稿原样留下。
  */
 export async function writeOriginalChapter(

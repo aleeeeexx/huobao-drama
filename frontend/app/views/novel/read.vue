@@ -10,7 +10,7 @@
       <section class="block">
         <h2>角色状态</h2>
         <p v-if="book?.architecture?.character_state" class="prose">{{ book.architecture.character_state }}</p>
-        <p v-else class="dim">写第一章时会先生成角色状态。</p>
+        <p v-else class="dim">写完一章后，这里记下这一章计划走到的终点。</p>
       </section>
 
       <details class="block">
@@ -18,11 +18,21 @@
         <template v-if="book?.architecture?.generated">
           <h3>核心种子</h3>
           <p class="prose">{{ book.architecture.core_seed }}</p>
-          <h3>角色动力学</h3>
-          <p class="prose">{{ book.architecture.character_dynamics }}</p>
+          <template v-if="book.architecture.core_idea">
+            <h3>核心设想</h3>
+            <p class="prose">{{ book.architecture.core_idea }}</p>
+          </template>
+          <template v-else-if="book.architecture.character_dynamics">
+            <h3>角色动力学</h3>
+            <p class="prose">{{ book.architecture.character_dynamics }}</p>
+          </template>
           <h3>世界观</h3>
           <p class="prose">{{ book.architecture.world_building }}</p>
-          <h3>情节架构</h3>
+          <template v-if="book.architecture.full_plot">
+            <h3>压缩故事</h3>
+            <p class="prose">{{ book.architecture.full_plot }}</p>
+          </template>
+          <h3>情节</h3>
           <p class="prose">{{ book.architecture.plot_architecture }}</p>
         </template>
         <p v-else class="dim">架构还没写。写下一章时会先补上。</p>
@@ -36,7 +46,7 @@
             <span v-if="item.summary">{{ item.summary }}</span>
           </li>
         </ol>
-        <p v-else class="dim">整本大纲会在第一次写章时生成。</p>
+        <p v-else class="dim">写到哪一章，就在这里留下这一章的计划。</p>
       </details>
 
       <NuxtLink v-if="book?.drama_id" class="studio-link" :to="`/drama/${book.drama_id}/episode/1`">在制作台打开原稿</NuxtLink>
@@ -46,7 +56,7 @@
       <div ref="logEl" class="log">
         <p v-if="loading" class="waiting">正在翻开这本书…</p>
         <p v-else-if="!(book?.chapters || []).length && !writing" class="waiting">
-          还没有正文。点下面的「写下一章」，会先写架构和整本大纲，再写第一章。
+          还没有正文。点下面的「写下一章」，会先补设定和这一章的计划，再写正文。续写会带上上一章。
         </p>
         <article v-for="chapter in book?.chapters || []" :key="chapter.number" class="chapter">
           <h2>第{{ chapter.number }}章 {{ chapter.title }}</h2>
@@ -127,8 +137,8 @@ import { novelAPI } from '~/composables/useApi'
 import { toastError } from '~/composables/useToast'
 
 const PHASE_LABELS: Record<string, string> = {
-  architecture: '正在生成小说架构',
-  blueprint: '正在生成整本大纲',
+  architecture: '正在生成小说设定',
+  blueprint: '正在规划这一章',
   draft: '正在写这一章',
   enrich: '正在扩写这一章',
   finalize: '正在定稿',

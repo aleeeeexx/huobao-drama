@@ -4,7 +4,7 @@
       <p class="eyebrow">小说创作</p>
       <h1>起一本书</h1>
       <p class="lede">
-        按原稿写。先生成架构和整本大纲，再一章一章写下去。每一章都可以生成剧情图和剧情视频。
+        按原稿写。先补设定和这一章的计划，再写正文。下一章会接上已经写好的上一章。每一章都可以生成剧情图和剧情视频。
       </p>
     </header>
 
@@ -24,7 +24,7 @@
         </label>
         <label class="field field-wide">
           <span class="field-label">内容指导</span>
-          <textarea v-model.trim="form.userGuidance" class="input" rows="3" maxlength="2000" placeholder="可留空。这里的话会原样作为用户指导，写进架构、大纲和章节。"></textarea>
+          <textarea v-model.trim="form.userGuidance" class="input" rows="3" maxlength="2000" placeholder="可留空。这些话会进入设定、本章计划和正文，不会改掉书名。"></textarea>
         </label>
         <label class="field">
           <span class="field-label">章节数</span>

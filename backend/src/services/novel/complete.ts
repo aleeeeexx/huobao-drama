@@ -1,12 +1,12 @@
 /**
- * 火宝小说的模型调用是一条 user 消息的 chat completion，没有工具。
- * 这里走短剧已经配好的文本服务，并套上制作台同一套关思考补丁，避免中转站把章节写到一半掐掉。
+ * 织界小说的模型调用是一条 user 消息的 chat completion，没有工具。
+ * 这里走已经配好的文本服务，并套上制作台同一套关思考补丁，避免中转站把章节写到一半掐掉。
  */
 import { getTextConfig, getTextProviderBaseUrl } from '../ai.js'
 import { installThinkingOffFetch } from '../../agents/thinking-off.js'
 import { NOVEL_MAX_TOKENS } from './generator.js'
 
-/** 火宝小说设置页的默认温度。文本服务若单独配了温度，以服务配置为准。 */
+/** 文本服务若单独配了温度，以服务配置为准；否则用 0.7。 */
 const NOVEL_TEMPERATURE = 0.7
 const NOVEL_TIMEOUT_MS = 600_000
 

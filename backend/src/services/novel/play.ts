@@ -1,7 +1,7 @@
 /**
  * 织界里的独立小说创作。
- * 正文只走火宝小说原稿：架构（含角色状态）→ 整本大纲 → firstDraft/nextDraft → 字数不足则扩写 → 定稿。
- * 不把正文交给剧本改写，也不做可读性整理。剧情图和剧情视频复用织界已有的生图、生视频通道。
+ * 正文走设定、本章计划和续写。不把正文交给剧本改写，也不做可读性整理。
+ * 剧情图和剧情视频复用织界已有的生图、生视频通道。
  */
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../../db/index.js'
@@ -18,6 +18,7 @@ import {
   maxBlueprintChapter,
   parseChapterBlueprint,
   architectureIncomplete,
+  settleNovelProject,
   type NovelProject,
 } from './generator.js'
 import {
@@ -324,14 +325,14 @@ function readNovelProject(
   try {
     const parsed = JSON.parse(raw) as Partial<NovelProject>
     if (!parsed || typeof parsed !== 'object') return seed
-    return {
+    return settleNovelProject({
       ...seed,
       ...parsed,
       chapters: parsed.chapters && typeof parsed.chapters === 'object' ? parsed.chapters : {},
       userGuidance: typeof parsed.userGuidance === 'string' ? parsed.userGuidance : seed.userGuidance,
       numberOfChapters: parsed.numberOfChapters || seed.numberOfChapters,
       wordNumber: parsed.wordNumber || seed.wordNumber,
-    }
+    })
   } catch {
     return seed
   }
@@ -425,10 +426,15 @@ function serializeBook(
     architecture: {
       generated: !architectureIncomplete(project),
       core_seed: project.coreSeed || '',
+      core_idea: project.coreIdea || '',
       character_dynamics: project.characterDynamics || '',
       character_state: project.characterState || '',
       world_building: project.worldBuilding || '',
       plot_architecture: project.plotArchitecture || '',
+      full_plot: project.fullPlot || '',
+      introduction: project.introduction || '',
+      tone: project.tone || '',
+      narrative_pov: project.narrativePov || '',
     },
     blueprint: project.chapterBlueprint || '',
     blueprint_ready: maxBlueprintChapter(project.chapterBlueprint) >= project.numberOfChapters,

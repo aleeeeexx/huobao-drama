@@ -1,8 +1,5 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { architecturePrompts } from '../src/services/novel/architecture.ts'
-import { chapterPrompts } from '../src/services/novel/chapter.ts'
-import { utilityPrompts } from '../src/services/novel/utility.ts'
 import {
   createNovelProject,
   NOVEL_DEFAULT_CHAPTER_COUNT,
@@ -87,38 +84,40 @@ test('an empty chapter note does not replace the book guidance', () => {
   assert.equal(chapterGuidanceForDraft('保留茶券', ' 让雨更大 '), '保留茶券\n\n让雨更大')
 })
 
-test('phase labels follow the original prompt openings, including text embedded in a later step', () => {
-  const params = {
-    topic: '雨',
-    genre: '悬疑',
-    numberOfChapters: 2,
-    wordNumber: 300,
-    userGuidance: '保留茶券',
-    coreSeed: '核心',
-    characterDynamics: '人物',
-    characterState: '状态',
-    worldBuilding: '世界',
-    plotArchitecture: '情节',
-    novelArchitecture: '物理维度：被嵌进大纲的世界观',
-    chapterNumber: 1,
-    chapterTitle: '雨夜',
-    chapterText: '即将创作：这段是正文，不是新的草稿提示词',
-  }
-  assert.equal(phaseForNovelPrompt(architecturePrompts.coreSeed(params)), 'architecture')
-  assert.equal(phaseForNovelPrompt(architecturePrompts.characterDynamics(params)), 'architecture')
-  assert.equal(phaseForNovelPrompt(architecturePrompts.characterState(params)), 'architecture')
-  assert.equal(phaseForNovelPrompt(architecturePrompts.worldBuilding(params)), 'architecture')
-  assert.equal(phaseForNovelPrompt(architecturePrompts.plotArchitecture(params)), 'architecture')
-  assert.equal(phaseForNovelPrompt(chapterPrompts.blueprint(params)), 'blueprint')
-  assert.equal(phaseForNovelPrompt(chapterPrompts.blueprintChunked({ ...params, startChapter: 1, endChapter: 2 })), 'blueprint')
-  assert.equal(phaseForNovelPrompt(chapterPrompts.firstDraft(params)), 'draft')
-  assert.equal(phaseForNovelPrompt(chapterPrompts.nextDraft(params)), 'draft')
-  assert.equal(phaseForNovelPrompt(chapterPrompts.enrich(params)), 'enrich')
-  assert.equal(phaseForNovelPrompt(utilityPrompts.summary({ chapterText: params.chapterText, globalSummary: '' })), 'finalize')
-  assert.equal(phaseForNovelPrompt(utilityPrompts.updateCharacterState({ chapterText: params.chapterText, oldState: '旧' })), 'finalize')
+test('phase labels follow the setting, plan, and chapter prompts', () => {
+  assert.equal(phaseForNovelPrompt('你是一名资深小说策划编辑，擅长将一个零散创意，扩写为一整本书。'), 'architecture')
+  assert.equal(phaseForNovelPrompt('你是一名资深小说编辑, 请从用户提供的长篇小说压缩剧情中提炼出清晰的小说构思要素。'), 'architecture')
+  assert.equal(phaseForNovelPrompt('作为专业作家, 请用“雪花写作法”第一步构建故事核心。'), 'architecture')
+  assert.equal(phaseForNovelPrompt('你是一名专业小说策划人, 请基于以下信息构建小说的整体设定。'), 'architecture')
+  assert.equal(phaseForNovelPrompt('你是小说作者的写作助手。根据当前场景规划生成章计划。每章填写目标。'), 'blueprint')
+  assert.equal(phaseForNovelPrompt('你是小说作者的写作助手。依据当前章计划完成本章正文。只输出正文。'), 'draft')
+  assert.equal(phaseForNovelPrompt('以下是新完成的章节文本：\n即将创作：这段是正文，不是新的草稿提示词'), 'finalize')
+  assert.equal(phaseForNovelPrompt('以下章节文本较短，请扩写。'), 'enrich')
 })
 
-test('the first chapter runs architecture, the full blueprint, draft, enrich and finalize without rewriting the manuscript', async () => {
+function settingAnswer(prompt: string): string {
+  if (prompt.includes('零散创意')) return JSON.stringify({ plot: '雨夜茶寮从回城写到茶券见光。' })
+  if (prompt.includes('提炼出清晰的小说构思要素')) {
+    return JSON.stringify({ genre: '悬疑', tone: '冷', target_audience: '成年读者', core_idea: '记者回来找茶券。' })
+  }
+  if (prompt.includes('雪花写作法')) return JSON.stringify({ core_seed: '当记者看见茶券，必须推门，否则旧案继续被雨盖住。' })
+  if (prompt.includes('构建小说的整体设定')) {
+    return JSON.stringify({
+      title: '生成的书名',
+      subtitle: '雨夜',
+      introduction: '有人回到茶寮。',
+      summary: '茶券把人留在门口。',
+      worldview: '江城的茶寮按旧规矩留灯。',
+      writing_style: '冷',
+      narrative_pov: '第一人称',
+      era_background: '当代',
+      tags: ['悬疑'],
+    })
+  }
+  throw new Error(`unexpected prompt: ${prompt.slice(0, 40)}`)
+}
+
+test('the first chapter runs setting, one chapter plan, and the manuscript without rewriting it', async () => {
   const phases: string[] = []
   const prompts: string[] = []
   const project = createNovelProject({
@@ -129,16 +128,21 @@ test('the first chapter runs architecture, the full blueprint, draft, enrich and
     numberOfChapters: 2,
     wordNumber: 80,
   })
-  const blueprint = readyProject().chapterBlueprint
   const result = await writeOriginalChapter(project, 1, async (prompt) => {
     prompts.push(prompt)
     const phase = phaseForNovelPrompt(prompt)
     if (phase) phases.push(phase)
-    if (phase === 'blueprint') return blueprint
-    if (phase === 'draft') return '短'
-    if (phase === 'enrich') return SCREENPLAY_LINE
-    if (prompt.includes('角色状态文档')) return '记者：推开了门'
-    return '写好的一段'
+    if (phase === 'blueprint') {
+      return JSON.stringify({
+        chapters: [{
+          title: '雨夜回城',
+          summary: '看见茶寮',
+          planning: { goal: '回到门口', start_state: '在雨里', end_state: '记者：推开了门', beats: ['茶券'] },
+        }],
+      })
+    }
+    if (phase === 'draft') return SCREENPLAY_LINE
+    return settingAnswer(prompt)
   }, {
     onPhase: (phase) => { phases.push(phase) },
   })
@@ -146,40 +150,37 @@ test('the first chapter runs architecture, the full blueprint, draft, enrich and
   assert.equal(phases.includes('architecture'), true)
   assert.equal(phases.includes('blueprint'), true)
   assert.equal(phases.includes('draft'), true)
-  assert.equal(phases.includes('enrich'), true)
-  assert.equal(phases.includes('finalize'), true)
+  assert.equal(phases.includes('enrich'), false)
+  assert.equal(phases.includes('finalize'), false)
   assert.equal(prompts.some(prompt => prompt.includes(STUDIO_SCRIPT_REWRITE_MESSAGE)), false)
-  assert.equal(prompts.some(prompt => prompt.trimStart().startsWith('作为专业作家')), true)
-  assert.equal(prompts.some(prompt => prompt.trimStart().startsWith('依据当前角色动力学设定')), true)
-  const statePrompt = prompts.findIndex(prompt => prompt.trimStart().startsWith('依据当前角色动力学设定'))
-  const blueprintPrompt = prompts.findIndex(prompt => prompt.includes('章的节奏分布'))
-  assert.ok(statePrompt >= 0 && blueprintPrompt > statePrompt)
+  const planAt = prompts.findIndex(prompt => prompt.includes('根据当前场景规划生成章计划'))
+  const draftAt = prompts.findIndex(prompt => prompt.includes('依据当前章计划完成本章正文'))
+  assert.ok(planAt > 0 && draftAt > planAt)
   assert.equal(result.chapterText, SCREENPLAY_LINE)
   assert.notEqual(visibleNarrative(SCREENPLAY_LINE), SCREENPLAY_LINE)
   assert.equal(result.project.chapters['1'], SCREENPLAY_LINE)
   assert.equal(result.project.userGuidance, '保留茶券这条线。')
   assert.equal(result.project.characterState, '记者：推开了门')
-  assert.equal(novelWritePhase(result.project, 1), 'finalize')
+  assert.equal(novelWritePhase(result.project, 1), 'draft')
 })
 
-test('the next chapter uses the original next-chapter draft and keeps a chapter note out of the book guidance', async () => {
+test('the next chapter keeps a chapter note out of the book guidance and uses the saved previous text', async () => {
   const prompts: string[] = []
   const result = await writeOriginalChapter(readyProject(), 2, async (prompt) => {
     prompts.push(prompt)
     if (phaseForNovelPrompt(prompt) === 'draft') return SCREENPLAY_LINE
-    if (prompt.includes('当前的角色状态文档')) return '记者：进了门'
-    return '摘要更新'
+    return '不应再规划'
   }, { chapterNote: '让雨更大' })
 
-  const draft = prompts.find(prompt => prompt.trimStart().startsWith('参考文档：'))
+  const draft = prompts.find(prompt => prompt.includes('依据当前章计划完成本章正文'))
   assert.ok(draft)
-  assert.match(draft || '', /角色状态/)
+  assert.match(draft || '', /灯还亮着/)
   assert.match(draft || '', /保留茶券这条线/)
   assert.match(draft || '', /让雨更大/)
   assert.equal(prompts.some(prompt => prompt.includes(STUDIO_SCRIPT_REWRITE_MESSAGE)), false)
-  assert.equal(prompts.some(prompt => prompt.trimStart().startsWith('即将创作：')), false)
+  assert.equal(prompts.some(prompt => prompt.includes('根据当前场景规划生成章计划')), false)
   assert.equal(result.chapterText, SCREENPLAY_LINE)
   assert.equal(result.project.userGuidance, '保留茶券这条线。')
   assert.equal(result.project.chapters['2'], SCREENPLAY_LINE)
-  assert.equal(result.project.characterState, '记者：进了门')
+  assert.equal(result.project.characterState, '掌柜认出茶券')
 })
