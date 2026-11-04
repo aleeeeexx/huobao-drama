@@ -6,6 +6,7 @@ import path from 'path'
 import sharp from 'sharp'
 import { v4 as uuid } from 'uuid'
 import { STORAGE_ROOT } from './paths.js'
+import { applyCodeccBrowserUserAgent } from '../agents/thinking-off.js'
 
 /**
  * 下载远程文件到本地存储
@@ -18,7 +19,8 @@ export async function downloadFile(url: string, subDir: string): Promise<string>
   const filename = `${uuid()}${ext}`
   const filePath = path.join(dir, filename)
 
-  const resp = await fetch(url)
+  const downloadRequest = applyCodeccBrowserUserAgent(url)
+  const resp = await fetch(downloadRequest.input as string, downloadRequest.init)
   if (!resp.ok) throw new Error(`Download failed: ${resp.status}`)
 
   const buffer = Buffer.from(await resp.arrayBuffer())
@@ -135,7 +137,8 @@ export async function fetchImageAsCompressedDataUrl(
     quality?: number
   } = {},
 ): Promise<string> {
-  const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+  const downloadRequest = applyCodeccBrowserUserAgent(url, { signal: AbortSignal.timeout(30_000) })
+  const resp = await fetch(downloadRequest.input as string, downloadRequest.init)
   if (!resp.ok) throw new Error(`下载参考图失败: HTTP ${resp.status}`)
   return compressImageAsDataUrl(Buffer.from(await resp.arrayBuffer()), options)
 }

@@ -48,6 +48,131 @@ export function isCodeccHost(baseURL: string) {
 }
 
 /**
+ * Cloudflare 按浏览器签名拒绝 Node 默认请求（error 1010）。
+ * codecc.cc 及其子域名缺浏览器 UA 时补这个常见桌面 Chrome。
+ */
+export const CODEC_BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
+
+const USER_AGENT_HEADER = 'user-agent'
+
+function requestTarget(input: unknown) {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.toString()
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.url
+  if (input && typeof input === 'object' && 'url' in input) {
+    const url = (input as { url?: unknown }).url
+    if (typeof url === 'string') return url
+    if (url instanceof URL) return url.toString()
+  }
+  return ''
+}
+
+function targetsCodecc(input: unknown, fallbackBaseURL?: string) {
+  const target = requestTarget(input)
+  try {
+    const url = new URL(target)
+    if (url.protocol === 'http:' || url.protocol === 'https:') return isCodeccHost(target)
+  } catch { /* 相对路径没有主机，交给调用方已知的 baseURL */ }
+  return Boolean(fallbackBaseURL && isCodeccHost(fallbackBaseURL))
+}
+
+function isBrowserUserAgent(value: string) {
+  return /mozilla\/|applewebkit\/|chrome\/|safari\/|firefox\/|edg\/|opr\//i.test(value)
+}
+
+/** AI SDK 在调用自定义 fetch 之前会写上 ai-sdk/... runtime/node.js/...，这正是 1010 要拒的签名。 */
+function isRuntimeUserAgent(value: string) {
+  return /ai-sdk\/|runtime\/node(?:\.js)?\b|(?:^|\s)(?:node|undici|bun)(?:\/|\s|$)/i.test(value)
+}
+
+function userAgentValues(headers: unknown) {
+  if (headers == null) return []
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    const value = headers.get(USER_AGENT_HEADER)?.trim()
+    return value ? [value] : []
+  }
+  if (Array.isArray(headers)) {
+    const values: string[] = []
+    for (const pair of headers) {
+      if (!Array.isArray(pair) || String(pair[0]).toLowerCase() !== USER_AGENT_HEADER) continue
+      const value = String(pair[1] ?? '').trim()
+      if (value) values.push(value)
+    }
+    return values
+  }
+  if (typeof headers === 'object') {
+    const values: string[] = []
+    for (const [key, raw] of Object.entries(headers as Record<string, unknown>)) {
+      if (key.toLowerCase() !== USER_AGENT_HEADER || raw == null) continue
+      const value = String(raw).trim()
+      if (value) values.push(value)
+    }
+    return values
+  }
+  return []
+}
+
+function needsBrowserUserAgent(values: string[]) {
+  if (values.length === 0) return true
+  if (values.some(isBrowserUserAgent)) return false
+  if (values.every(isRuntimeUserAgent)) return true
+  return false
+}
+
+function effectiveHeaders(input: unknown, init: { headers?: unknown } | undefined) {
+  if (init && Object.prototype.hasOwnProperty.call(init, 'headers') && init.headers != null) return init.headers
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.headers
+  return undefined
+}
+
+function headersWithBrowserUserAgent(headers: unknown) {
+  if (headers == null) return { 'User-Agent': CODEC_BROWSER_USER_AGENT }
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    const copy = new Headers(headers)
+    copy.set('User-Agent', CODEC_BROWSER_USER_AGENT)
+    return copy
+  }
+  if (Array.isArray(headers)) {
+    const kept = headers.filter(pair => !(Array.isArray(pair) && String(pair[0]).toLowerCase() === USER_AGENT_HEADER))
+    return [...kept, ['User-Agent', CODEC_BROWSER_USER_AGENT]]
+  }
+  if (typeof headers === 'object') {
+    const next: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+      if (key.toLowerCase() === USER_AGENT_HEADER) continue
+      next[key] = value
+    }
+    next['User-Agent'] = CODEC_BROWSER_USER_AGENT
+    return next
+  }
+  return { 'User-Agent': CODEC_BROWSER_USER_AGENT }
+}
+
+/**
+ * 给 codecc 请求补浏览器 User-Agent。
+ * 调用方传入的普通对象 headers 原样保留（测试读 headers.Authorization），不换成 Headers。
+ * 已经有浏览器或自定义 UA 时不改；只有缺省，或 AI SDK / Node 自动写上的运行时 UA，才替换。
+ */
+export function applyCodeccBrowserUserAgent(input: unknown, init?: any, fallbackBaseURL?: string) {
+  if (!targetsCodecc(input, fallbackBaseURL)) return { input, init }
+  if (!needsBrowserUserAgent(userAgentValues(effectiveHeaders(input, init)))) return { input, init }
+  const source = init && typeof init === 'object' && init.headers != null
+    ? init.headers
+    : effectiveHeaders(input, init)
+  const headers = headersWithBrowserUserAgent(source)
+  const nextInit = init && typeof init === 'object' ? { ...init, headers } : { headers }
+  return { input, init: nextInit }
+}
+
+export function installCodeccUserAgentFetch(fetchImpl?: typeof fetch): typeof fetch {
+  const base = fetchImpl || fetch
+  return async (input: any, init?: any) => {
+    const next = applyCodeccBrowserUserAgent(input, init)
+    return base(next.input as any, next.init)
+  }
+}
+
+/**
  * xAI / Grok 拒绝 reasoning_effort:"none"(以及 "max")。
  * 按模型族判断,不写死某一个版本号。
  */
@@ -149,6 +274,10 @@ export function installThinkingOffFetch(options: {
   const fetchImpl = options.fetchImpl || fetch
   const state = options.state || sharedState
   const baseURL = options.baseURL
+  const callUpstream = (requestInput: any, requestInit?: any) => {
+    const next = applyCodeccBrowserUserAgent(requestInput, requestInit, baseURL)
+    return fetchImpl(next.input as any, next.init)
+  }
 
   return async (input: any, init?: any) => {
     let sentReasoningEffortNone = false
@@ -178,7 +307,7 @@ export function installThinkingOffFetch(options: {
       }
     } catch { /* 解析失败则原样透传 */ }
 
-    const response = await fetchImpl(input, init)
+    const response = await callUpstream(input, init)
     if (!sentReasoningEffortNone || response.ok || !init?.body || typeof init.body !== 'string') return response
 
     const errorText = await response.text()
@@ -194,7 +323,7 @@ export function installThinkingOffFetch(options: {
     }
     if (retryBody?.reasoning_effort !== 'none') return responseWithText(response, errorText)
     delete retryBody.reasoning_effort
-    const retry = await fetchImpl(input, { ...init, body: JSON.stringify(retryBody) })
+    const retry = await callUpstream(input, { ...init, body: JSON.stringify(retryBody) })
     // 只有去掉该字段后上游真正接受,才记住。暂时的 500 不会把关思考字段永久拿掉。
     if (retry.ok) {
       state.rejected.add(rejectionKey(baseURL, model))

@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  CODEC_BROWSER_USER_AGENT,
+  installCodeccUserAgentFetch,
   installThinkingOffFetch,
   isCodeccHost,
   isUnsupportedReasoningEffortError,
@@ -237,4 +239,140 @@ test('non-official gemini keeps native thinkingConfig and does not use reasoning
     }),
   })
   assert.deepEqual(gemini3.bodies[0].generationConfig.thinkingConfig, { thinkingLevel: 'low' })
+})
+
+function recordFetch() {
+  const seen: Array<{ input: unknown; init: any }> = []
+  const fetchImpl = async (input: unknown, init?: any) => {
+    seen.push({ input, init })
+    return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  return { fetchImpl: fetchImpl as typeof fetch, seen }
+}
+
+test('codecc fetch keeps plain authorization headers and adds a browser user agent', async () => {
+  const { fetchImpl, seen } = recordFetch()
+  const wrapped = installCodeccUserAgentFetch(fetchImpl)
+  const headers = { Authorization: 'Bearer test-key', 'Content-Type': 'application/json' }
+  await wrapped('https://codecc.cc/v1/chat/completions', { method: 'POST', headers, body: '{}' })
+  assert.equal(seen[0].init.headers instanceof Headers, false)
+  assert.equal(seen[0].init.headers.Authorization, 'Bearer test-key')
+  assert.equal(seen[0].init.headers['Content-Type'], 'application/json')
+  assert.equal(seen[0].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+  assert.equal('User-Agent' in headers, false)
+
+  const models = { Authorization: 'Bearer test-key' }
+  await wrapped('https://api.codecc.cc/v1/models', { method: 'GET', headers: models })
+  assert.equal(seen[1].init.headers.Authorization, 'Bearer test-key')
+  assert.equal(seen[1].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+  assert.equal(Array.isArray(seen[1].init.headers), false)
+})
+
+test('an existing user agent is kept, and a runtime signature is replaced only on codecc', async () => {
+  const { fetchImpl, seen } = recordFetch()
+  const wrapped = installCodeccUserAgentFetch(fetchImpl)
+  const custom = { method: 'GET', headers: { Authorization: 'Bearer test-key', 'User-Agent': 'MyApp/1.0' } }
+  await wrapped('https://codecc.cc/v1/models', custom)
+  assert.equal(seen[0].init, custom)
+  assert.equal(seen[0].init.headers['User-Agent'], 'MyApp/1.0')
+
+  const browser = { method: 'GET', headers: { 'user-agent': 'Mozilla/5.0 (custom) AppleWebKit/537.36 Chrome/142.0.0.0 Safari/537.36' } }
+  await wrapped('https://codecc.cc/v1/models', browser)
+  assert.equal(seen[1].init, browser)
+
+  const runtimeHeaders = {
+    authorization: 'Bearer test-key',
+    'content-type': 'application/json',
+    'user-agent': 'ai-sdk/provider-utils/4.0.21 runtime/node.js/v22.23.4',
+  }
+  await wrapped('https://codecc.cc/v1/chat/completions', { method: 'POST', headers: runtimeHeaders, body: '{}' })
+  assert.equal(seen[2].init.headers.authorization, 'Bearer test-key')
+  assert.equal(seen[2].init.headers['content-type'], 'application/json')
+  assert.equal(seen[2].init.headers['user-agent'], undefined)
+  assert.equal(seen[2].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+  assert.equal(seen[2].init.headers instanceof Headers, false)
+  assert.equal(runtimeHeaders['user-agent'], 'ai-sdk/provider-utils/4.0.21 runtime/node.js/v22.23.4')
+
+  const elsewhere = { method: 'GET', headers: { Authorization: 'Bearer test-key' } }
+  await wrapped('https://api.deepseek.com/v1/models', elsewhere)
+  assert.equal(seen[3].init, elsewhere)
+  assert.equal(seen[3].init.headers['User-Agent'], undefined)
+
+  await wrapped('https://codecc.cc.evil.com/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer test-key' } })
+  assert.equal(seen[4].init.headers['User-Agent'], undefined)
+  assert.equal(seen[4].init.headers.Authorization, 'Bearer test-key')
+})
+
+test('header lists and request objects gain a browser user agent without dropping authorization', async () => {
+  const { fetchImpl, seen } = recordFetch()
+  const wrapped = installCodeccUserAgentFetch(fetchImpl)
+  await wrapped('https://codecc.cc/v1/models', {
+    method: 'GET',
+    headers: [['Authorization', 'Bearer list-key'], ['Accept', 'application/json']],
+  })
+  assert.equal(Array.isArray(seen[0].init.headers), true)
+  assert.deepEqual(seen[0].init.headers[0], ['Authorization', 'Bearer list-key'])
+  assert.deepEqual(seen[0].init.headers[2], ['User-Agent', CODEC_BROWSER_USER_AGENT])
+
+  const headerObject = new Headers({ Authorization: 'Bearer header-key' })
+  await wrapped('https://api.codecc.cc/v1/models', { method: 'GET', headers: headerObject })
+  assert.equal(seen[1].init.headers instanceof Headers, true)
+  assert.equal(seen[1].init.headers.get('authorization'), 'Bearer header-key')
+  assert.equal(seen[1].init.headers.get('user-agent'), CODEC_BROWSER_USER_AGENT)
+  assert.equal(headerObject.get('user-agent'), null)
+
+  const request = new Request('https://codecc.cc/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer request-key', 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  await wrapped(request)
+  assert.equal(seen[2].input, request)
+  assert.equal(seen[2].init.headers instanceof Headers, true)
+  assert.equal(seen[2].init.headers.get('authorization'), 'Bearer request-key')
+  assert.equal(seen[2].init.headers.get('user-agent'), CODEC_BROWSER_USER_AGENT)
+
+  const preset = new Request('https://codecc.cc/v1/models', {
+    headers: { Authorization: 'Bearer kept', 'User-Agent': 'MyApp/1.0' },
+  })
+  await wrapped(preset)
+  assert.equal(seen[3].init, undefined)
+})
+
+test('thinking-off wrapper adds the browser user agent on codecc without changing other hosts', async () => {
+  const codecc = recordFetch()
+  const wrapped = installThinkingOffFetch({
+    providerName: 'openai',
+    baseURL: 'https://codecc.cc/v1',
+    enabled: true,
+    fetchImpl: codecc.fetchImpl,
+    state: freshState(),
+  })
+  assert.ok(wrapped)
+  const headers = { Authorization: 'Bearer test-key' }
+  await wrapped('https://codecc.cc/v1/chat/completions', { ...chatInit('grok-4.7'), headers })
+  assert.equal(codecc.seen[0].init.headers.Authorization, 'Bearer test-key')
+  assert.equal(codecc.seen[0].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+  assert.equal(JSON.parse(codecc.seen[0].init.body).reasoning_effort, undefined)
+  assert.equal('User-Agent' in headers, false)
+
+  await wrapped('/v1/chat/completions', chatInit('grok-4.7'))
+  assert.equal(codecc.seen[1].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+
+  await wrapped('https://api.deepseek.com/v1/chat/completions', chatInit('deepseek-chat'))
+  assert.equal(codecc.seen[2].init.headers, undefined)
+
+  const other = recordFetch()
+  const otherFetch = installThinkingOffFetch({
+    providerName: 'openai',
+    baseURL: 'https://api.deepseek.com/v1',
+    enabled: true,
+    fetchImpl: other.fetchImpl,
+    state: freshState(),
+  })
+  assert.ok(otherFetch)
+  const otherHeaders = { Authorization: 'Bearer test-key' }
+  await otherFetch('https://api.deepseek.com/v1/chat/completions', { ...chatInit('deepseek-chat'), headers: otherHeaders })
+  assert.equal(other.seen[0].init.headers, otherHeaders)
+  assert.equal(other.seen[0].init.headers['User-Agent'], undefined)
 })

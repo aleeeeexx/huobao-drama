@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import { NOVEL_MAX_TOKENS } from '../src/services/novel/project.ts'
+import { CODEC_BROWSER_USER_AGENT } from '../src/agents/thinking-off.ts'
 
 process.env.MYSQL_AUTO_IMPORT = 'false'
 process.env.SQLITE_PATH = path.join(os.tmpdir(), `huobao-novel-complete-${process.pid}.sqlite3`)
@@ -101,6 +102,8 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].init.method, 'POST')
     assert.equal(requests[0].init.headers.Authorization, 'Bearer test-key')
     assert.equal(requests[0].init.headers.Accept, 'text/event-stream')
+    assert.equal(requests[0].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+    assert.equal(requests[0].init.headers instanceof Headers, false)
     assert.ok(requests[0].init.signal instanceof AbortSignal)
     assert.equal(requests[0].body.model, 'grok-4.7')
     assert.equal(requests[0].body.stream, true)
@@ -165,6 +168,7 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].body.thinking, undefined)
     assert.equal(requests[0].body.enable_thinking, undefined)
     assert.equal(requests[0].body.reasoning_effort, undefined)
+    assert.equal(requests[0].init.headers['User-Agent'], undefined)
   })
 
   test('keeps an explicit temperature of 0', async () => {
@@ -209,6 +213,9 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(result, '第二次写完')
     assert.equal(requests.length, 2)
     assert.equal(requests[1].body.stream, true)
+    assert.equal(requests[0].init.headers.Authorization, 'Bearer test-key')
+    assert.equal(requests[0].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
+    assert.equal(requests[1].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
     assert.deepEqual(timeouts, [600_000, 600_000])
   })
 
@@ -301,6 +308,8 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].body.thinking, undefined)
     assert.equal(requests[0].body.enable_thinking, undefined)
     assert.equal(requests[0].body.reasoning_effort, undefined)
+    assert.equal(requests[0].init.headers.Authorization, 'Bearer test-key')
+    assert.equal(requests[0].init.headers['User-Agent'], CODEC_BROWSER_USER_AGENT)
   })
 
   test('gemini stream skips thoughts and keeps generation limits', async () => {
@@ -323,6 +332,7 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].url, 'https://gemini.example/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse')
     assert.equal(requests[0].init.headers['x-goog-api-key'], 'test-key')
     assert.equal(requests[0].init.headers.Authorization, undefined)
+    assert.equal(requests[0].init.headers['User-Agent'], undefined)
     assert.equal(requests[0].body.generationConfig.temperature, 0.4)
     assert.equal(requests[0].body.generationConfig.maxOutputTokens, NOVEL_MAX_TOKENS)
     assert.deepEqual(requests[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0, includeThoughts: false })

@@ -6,6 +6,7 @@ import { toSnakeCase } from '../utils/transform.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { isOfficialProvider, parseConfigTemperature } from '../services/ai.js'
 import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess } from '../utils/task-logger.js'
+import { applyCodeccBrowserUserAgent } from '../agents/thinking-off.js'
 
 const app = new Hono()
 
@@ -199,11 +200,12 @@ app.post('/test', async (c) => {
   })
 
   try {
-    const resp = await fetch(probe.url, {
+    const probeRequest = applyCodeccBrowserUserAgent(probe.url, {
       method: probe.method,
       headers: probe.headers,
       body: probe.body ? JSON.stringify(probe.body) : undefined,
     })
+    const resp = await fetch(probeRequest.input as string, probeRequest.init)
     const text = await resp.text()
     const reachable = [200, 204, 400, 401, 403].includes(resp.status)
     const payload = {
