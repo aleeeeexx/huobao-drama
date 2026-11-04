@@ -111,7 +111,7 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].body.max_tokens, NOVEL_MAX_TOKENS)
     assert.deepEqual(requests[0].body.messages, [{ role: 'user', content: PROMPT }])
     assert.equal(requests[0].body.reasoning_effort, undefined)
-    assert.deepEqual(requests[0].body.thinking, { type: 'disabled' })
+    assert.equal(requests[0].body.thinking, undefined)
     assert.equal(requests[0].body.enable_thinking, false)
   })
 
@@ -262,6 +262,51 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     const text = await completeNovelPrompt(PROMPT, { config: textConfig(), fetchImpl })
     assert.equal(text, '流里恢复')
     assert.equal(requests.length, 2)
+  })
+
+  test('retries a stream-embedded upstream_error once and then returns the text', async () => {
+    const upstream = sse([
+      chatDelta({ role: 'assistant' }),
+      { error: { message: 'Upstream service temporarily unavailable', type: 'upstream_error' } },
+    ])
+    const { fetchImpl, requests } = scriptedFetch([
+      { body: upstream },
+      { body: sse([chatDelta({ content: '重试写完' })]) },
+    ])
+    const text = await completeNovelPrompt(PROMPT, { config: textConfig(), fetchImpl })
+    assert.equal(text, '重试写完')
+    assert.equal(requests.length, 2)
+    assert.equal(requests[0].body.stream, true)
+    assert.equal(requests[1].body.stream, true)
+  })
+
+  test('surfaces the upstream message when upstream_error happens twice', async () => {
+    const upstream = sse([
+      chatDelta({ role: 'assistant' }),
+      { error: { message: 'Upstream service temporarily unavailable', type: 'upstream_error' } },
+    ])
+    const { fetchImpl, requests } = scriptedFetch([
+      { body: upstream },
+      { body: upstream },
+      { body: sse([chatDelta({ content: '不该再请求' })]) },
+    ])
+    await assert.rejects(
+      () => completeNovelPrompt(PROMPT, { config: textConfig(), fetchImpl }),
+      { message: '小说章节生成失败：Upstream service temporarily unavailable' },
+    )
+    assert.equal(requests.length, 2)
+  })
+
+  test('does not retry a stream error that has a message but is not upstream_error', async () => {
+    const { fetchImpl, requests } = scriptedFetch([
+      { body: sse([chatDelta({ role: 'assistant' }), { error: { message: 'content policy' } }]) },
+      { body: sse([chatDelta({ content: '不该再请求' })]) },
+    ])
+    await assert.rejects(
+      () => completeNovelPrompt(PROMPT, { config: textConfig(), fetchImpl }),
+      { message: '小说章节生成失败' },
+    )
+    assert.equal(requests.length, 1)
   })
 
   test('does not retry auth, overload, malformed JSON, or an aborted request', async () => {

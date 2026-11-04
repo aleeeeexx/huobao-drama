@@ -33,7 +33,7 @@ const chatInit = (model: string) => ({
   }),
 })
 
-test('codecc drops reasoning_effort none and keeps the other thinking-off fields', async () => {
+test('codecc drops reasoning_effort none and thinking disabled, keeps enable_thinking false', async () => {
   const { fetchImpl, bodies } = chatFetch(200, '{"ok":true}')
   const wrapped = installThinkingOffFetch({
     providerName: 'openai',
@@ -43,12 +43,12 @@ test('codecc drops reasoning_effort none and keeps the other thinking-off fields
     state: freshState(),
   })
   assert.ok(wrapped)
-  await wrapped('https://codecc.cc/v1/chat/completions', chatInit('grok-4.7'))
+  await wrapped('https://codecc.cc/v1/chat/completions', chatInit('gpt-6.1-sol'))
   assert.equal(bodies.length, 1)
   assert.equal(bodies[0].reasoning_effort, undefined)
-  assert.deepEqual(bodies[0].thinking, { type: 'disabled' })
+  assert.equal(bodies[0].thinking, undefined)
   assert.equal(bodies[0].enable_thinking, false)
-  assert.equal(bodies[0].model, 'grok-4.7')
+  assert.equal(bodies[0].model, 'gpt-6.1-sol')
 })
 
 test('codecc subdomains are treated as codecc; lookalike hosts are not', async () => {
@@ -65,6 +65,22 @@ test('codecc subdomains are treated as codecc; lookalike hosts are not', async (
   assert.ok(wrapped)
   await wrapped('https://codecc.cc.evil.com/v1/chat/completions', chatInit('gpt-4o-mini'))
   assert.equal(bodies[0].reasoning_effort, 'none')
+  assert.deepEqual(bodies[0].thinking, { type: 'disabled' })
+  assert.equal(bodies[0].enable_thinking, false)
+
+  const subdomain = chatFetch(200, '{"ok":true}')
+  const subdomainFetch = installThinkingOffFetch({
+    providerName: 'openai',
+    baseURL: 'https://api.codecc.cc/v1',
+    enabled: true,
+    fetchImpl: subdomain.fetchImpl as typeof fetch,
+    state: freshState(),
+  })
+  assert.ok(subdomainFetch)
+  await subdomainFetch('https://api.codecc.cc/v1/chat/completions', chatInit('gpt-6.1-sol'))
+  assert.equal(subdomain.bodies[0].reasoning_effort, undefined)
+  assert.equal(subdomain.bodies[0].thinking, undefined)
+  assert.equal(subdomain.bodies[0].enable_thinking, false)
 })
 
 test('grok models drop reasoning_effort none on any host; gemini-compatible channels keep it', async () => {
@@ -146,7 +162,48 @@ test('explicit low effort is kept; a custom patch without reasoning_effort is se
   assert.ok(customFetch)
   await customFetch('https://api.deepseek.com/v1/chat/completions', chatInit('deepseek-chat'))
   assert.equal(custom.bodies[0].reasoning_effort, undefined)
+  assert.deepEqual(custom.bodies[0].thinking, { type: 'disabled' })
   assert.equal(custom.bodies[0].enable_thinking, false)
+})
+
+test('codecc strips disabled thinking from the patch and the original body, and keeps other thinking values', async () => {
+  const stripped = chatFetch(200, '{"ok":true}')
+  const strippedFetch = installThinkingOffFetch({
+    providerName: 'openai',
+    baseURL: 'https://codecc.cc/v1',
+    enabled: true,
+    patchRaw: '{"enable_thinking":false}',
+    fetchImpl: stripped.fetchImpl as typeof fetch,
+    state: freshState(),
+  })
+  assert.ok(strippedFetch)
+  await strippedFetch('https://codecc.cc/v1/chat/completions', {
+    method: 'POST',
+    body: JSON.stringify({
+      model: 'gpt-6.1-sol',
+      messages: [{ role: 'user', content: '开场' }],
+      thinking: { type: 'disabled' },
+      reasoning_effort: 'none',
+    }),
+  })
+  assert.equal(stripped.bodies[0].thinking, undefined)
+  assert.equal(stripped.bodies[0].reasoning_effort, undefined)
+  assert.equal(stripped.bodies[0].enable_thinking, false)
+
+  const kept = chatFetch(200, '{"ok":true}')
+  const keptFetch = installThinkingOffFetch({
+    providerName: 'openai',
+    baseURL: 'https://codecc.cc/v1',
+    enabled: true,
+    patchRaw: '{"thinking":{"type":"enabled"},"enable_thinking":false}',
+    fetchImpl: kept.fetchImpl as typeof fetch,
+    state: freshState(),
+  })
+  assert.ok(keptFetch)
+  await keptFetch('https://codecc.cc/v1/chat/completions', chatInit('qwen-plus'))
+  assert.deepEqual(kept.bodies[0].thinking, { type: 'enabled' })
+  assert.equal(kept.bodies[0].enable_thinking, false)
+  assert.equal(kept.bodies[0].reasoning_effort, undefined)
 })
 
 test('gateway 500 Upstream gateway error is retried once without reasoning_effort and then remembered', async () => {
