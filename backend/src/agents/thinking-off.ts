@@ -8,6 +8,8 @@
  * reasoning_effort:"none" 是给 Gemini 兼容渠道把思考预算打成 0 的。
  * codecc 会把这个字段原样转给上游;Grok / xAI 不接受 "none",
  * 单独带上它就会 HTTP 500(Upstream gateway error),去掉后同一请求返回 200。
+ * codecc 还会把 thinking:{type:"disabled"} 当成 reasoning_effort:"none",
+ * gpt-6.1-sol 等模型会 HTTP 400。codecc 只保留 enable_thinking:false。
  * 官方 OpenAI / Gemini 端点不注入(官方会拒绝未知参数)。
  */
 import { logTaskWarn } from '../utils/task-logger.js'
@@ -41,10 +43,15 @@ export function thinkingOffHostKey(baseURL: string) {
   }
 }
 
-/** codecc 网关不接受 reasoning_effort:"none"(含子域名,不含仿冒域名)。 */
+/** codecc 网关(含子域名,不含仿冒域名)。不接受 reasoning_effort:"none",并把 thinking.type=disabled 当成 none。 */
 export function isCodeccHost(baseURL: string) {
   const host = thinkingOffHostKey(baseURL)
   return host === 'codecc.cc' || host.endsWith('.codecc.cc')
+}
+
+function isDisabledThinking(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return (value as { type?: unknown }).type === 'disabled'
 }
 
 /**
@@ -170,8 +177,10 @@ export function installThinkingOffFetch(options: {
             else if (modelRejectsReasoningEffortNone(model)) reason = 'grok'
             noteOmit(baseURL, model, reason, state)
           }
+          if (isCodeccHost(baseURL) && isDisabledThinking(patch.thinking)) delete patch.thinking
           Object.assign(body, patch)
           if (omit && body.reasoning_effort === 'none') delete body.reasoning_effort
+          if (isCodeccHost(baseURL) && isDisabledThinking(body.thinking)) delete body.thinking
           sentReasoningEffortNone = body.reasoning_effort === 'none'
           init = { ...init, body: JSON.stringify(body) }
         }

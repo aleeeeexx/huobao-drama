@@ -108,7 +108,7 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].body.max_tokens, NOVEL_MAX_TOKENS)
     assert.deepEqual(requests[0].body.messages, [{ role: 'user', content: PROMPT }])
     assert.equal(requests[0].body.reasoning_effort, undefined)
-    assert.deepEqual(requests[0].body.thinking, { type: 'disabled' })
+    assert.equal(requests[0].body.thinking, undefined)
     assert.equal(requests[0].body.enable_thinking, false)
   })
 
