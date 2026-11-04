@@ -12,7 +12,7 @@ import { NOVEL_MAX_TOKENS } from './generator.js'
 /** 文本服务若单独配了温度，以服务配置为准；否则用 0.7。 */
 const NOVEL_TEMPERATURE = 0.7
 const NOVEL_TIMEOUT_MS = 600_000
-/** 524 和空正文各再试一次。长生成一次就要一两分钟，不再加次数。 */
+/** 524、空正文，以及流里的 upstream_error，各再试一次。长生成一次就要一两分钟，不再加次数。 */
 const NOVEL_COMPLETION_ATTEMPTS = 2
 const NOVEL_COMPLETION_RETRY_DELAY_MS = 500
 const EMPTY_NOVEL_RESULT = '小说章节没有写出来'
@@ -140,7 +140,16 @@ async function completeWithRetry(run: () => Promise<string>): Promise<string> {
   throw lastError instanceof Error ? lastError : new Error(EMPTY_NOVEL_RESULT)
 }
 
-function novelRetryReason(error: unknown): '524' | 'empty' | null {
+/** 流里没有状态码的 upstream_error。message 留给调用方看上游原文。 */
+class NovelUpstreamError extends Error {
+  constructor(detail: string) {
+    super(detail ? `小说章节生成失败：${detail}` : '小说章节生成失败')
+    this.name = 'NovelUpstreamError'
+  }
+}
+
+function novelRetryReason(error: unknown): '524' | 'empty' | 'upstream' | null {
+  if (error instanceof NovelUpstreamError) return 'upstream'
   if (!(error instanceof Error)) return null
   if (error.message === EMPTY_NOVEL_RESULT) return 'empty'
   if (error.message === '小说章节生成失败（524）') return '524'
@@ -264,7 +273,19 @@ function throwIfPayloadError(payload: unknown) {
   if (error == null) return
   const status = httpStatusFromError(error)
   if (status) throw new Error(`小说章节生成失败（${status}）`)
+  if (isUpstreamPayloadError(error)) throw new NovelUpstreamError(errorDetail(error))
   throw new Error('小说章节生成失败')
+}
+
+function isUpstreamPayloadError(error: unknown) {
+  return !!error && typeof error === 'object' && (error as { type?: unknown }).type === 'upstream_error'
+}
+
+function errorDetail(error: unknown) {
+  if (!error || typeof error !== 'object') return ''
+  const message = (error as { message?: unknown }).message
+  if (typeof message !== 'string') return ''
+  return message.replace(/\s+/g, ' ').trim()
 }
 
 function httpStatusFromError(error: unknown): number | null {
