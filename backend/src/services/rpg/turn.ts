@@ -729,7 +729,7 @@ function referenceCaption(references: Array<{ kind: ReferenceKind; name: string 
 
 /**
  * 句号落在摘录前部时丢掉半句；找不到句号就整段保留。
- * 织界正文续写不用这里。它把上一章已保存正文放进本章，过长时保留结尾并标明截断。
+ * 织界正文续写不用这里。它按私有 writing_context 只带上一章最后 6000 字，并用 truncated 标明是否截断。
  */
 export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EXCERPT_CHARS): string {
   const text = (recent || '').trim()

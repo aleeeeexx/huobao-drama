@@ -1,13 +1,13 @@
 # 小说模块
 
-织界旁边的独立服务。它不替换站内 `/novel`。建书执行 [AI_NovelGenerator](https://github.com/YILING0013/AI_NovelGenerator) `main` 上的默认任务 `create_novel_by_ai`：
+织界旁边的独立服务。它不替换站内 `/novel`。建书执行私有 [AI_NovelGenerator](https://github.com/aleeeeexx/AI_NovelGenerator) main 快照里的默认任务 `create_novel_by_ai`：
 
 1. 把创意扩成一整本的压缩故事
 2. 提炼类型、基调、目标读者和核心设想
 3. 生成核心种子
 4. 生成书名、简介、世界观等设定
 
-提示词和任务图在 `vendor/ai-novel-generator/`，来自提交 `a61674fad4dd6c4c5fa9a2ad2f12b667109e628a`，许可证是 GNU AGPL v3.0（见该目录 `LICENSE`）。上游完整程序还依赖 Python 3.13、MongoDB 副本集和 Next.js。这一版只把已经能单独跑通的建书图接进 Node，避免再起一套数据库和前端进程。
+提示词和任务图在 `vendor/ai-novel-generator/`，字节来自私有 `aleeeeexx/AI_NovelGenerator` 的 main 快照，许可证是该快照携带的 GNU AGPL v3.0（见该目录 `LICENSE`）。上游完整程序还依赖 Python 3.13、MongoDB 副本集和 Next.js。这一版只把已经能单独跑通的建书图接进 Node，避免再起一套数据库和前端进程。
 
 ## 在织界里打开
 

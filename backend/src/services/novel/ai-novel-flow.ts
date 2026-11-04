@@ -1,8 +1,9 @@
 /**
  * 织界文章生成与续写。
- * 设定按 AI_NovelGenerator 的 create_novel_by_ai 连线执行。
- * 章计划与正文使用同一版本的 plan_chapters_by_ai / write_chapter_by_ai 提示词。
- * 提示词目录：ai-novel/vendor/ai-novel-generator（YILING0013/AI_NovelGenerator @ a61674f）。
+ * 对照权威是私有仓库 aleeeeexx/AI_NovelGenerator 的 main 快照，不是公开的 YILING0013 副本。
+ * 设定按该快照的 create_novel_by_ai 连线执行。
+ * 章计划和正文使用同一快照的 plan_chapters_by_ai / write_chapter_by_ai 提示词。
+ * 前文摘录长度与 writing_context.py 一致：只保留上一章最后 6000 字。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -19,9 +20,8 @@ const SOURCE_DEFAULTS = path.resolve(
   '../../../../ai-novel/vendor/ai-novel-generator/defaults',
 )
 
-/** 续写保留的前一章最大字数。超出时保留结尾，并写明开头已被截断。 */
-export const NOVEL_PREVIOUS_TEXT_CHARS = 12000
-const PREVIOUS_TEXT_TRUNCATED = '前文开头已截断。被截掉的部分保持未知，不能据此断言从未发生。'
+/** 与私有 writing_context.py 的 previous_excerpt_limit 相同。超出时只保留结尾，并用 truncated 标明。 */
+export const NOVEL_PREVIOUS_TEXT_CHARS = 6000
 
 const CHAPTER_PLAN_JSON_SCHEMA = {
   type: 'object',
@@ -333,12 +333,13 @@ export async function generateNovelSetting(
   return next
 }
 
-export function previousChapterText(text: string): { text: string; truncated: boolean } {
+export function previousChapterText(text: string): { excerpt: string; truncated: boolean; excerptStart: number } {
   const source = text || ''
-  if (source.length <= NOVEL_PREVIOUS_TEXT_CHARS) return { text: source, truncated: false }
+  const truncated = source.length > NOVEL_PREVIOUS_TEXT_CHARS
   return {
-    text: `${PREVIOUS_TEXT_TRUNCATED}\n${source.slice(-NOVEL_PREVIOUS_TEXT_CHARS)}`,
-    truncated: true,
+    excerpt: truncated ? source.slice(-NOVEL_PREVIOUS_TEXT_CHARS) : source,
+    truncated,
+    excerptStart: truncated ? source.length - NOVEL_PREVIOUS_TEXT_CHARS : 0,
   }
 }
 
@@ -411,45 +412,101 @@ export function appendRenderedPlan(blueprint: string, chapterNumber: number, pla
   return blueprint.trim() ? `${blueprint.trim()}\n\n${block}` : block
 }
 
+function planningFields(plan: ParsedChapterPlan | null): Record<string, unknown> | null {
+  if (!plan) return null
+  return {
+    goal: plan.goal,
+    start_state: plan.startState,
+    end_state: plan.endState,
+    beats: plan.beats,
+    must_include: plan.mustInclude,
+    must_avoid: plan.mustAvoid,
+    target_word_count: plan.targetWordCount,
+    pov_character_id: null,
+  }
+}
+
 function writingBundle(project: NovelProject, chapterNumber: number, guidance: string, task: 'plan_chapters_by_ai' | 'write_chapter_by_ai') {
-  const previous = chapterNumber > 1 ? previousChapterText(project.chapters[String(chapterNumber - 1)] || '') : { text: '', truncated: false }
+  const previousSource = chapterNumber > 1 ? (project.chapters[String(chapterNumber - 1)] || '') : ''
+  const previous = previousSource ? previousChapterText(previousSource) : null
   const previousPlan = chapterNumber > 1 ? chapterPlan(project, chapterNumber - 1) : null
   const currentPlan = task === 'write_chapter_by_ai' ? chapterPlan(project, chapterNumber) : null
+  const savedChapter = project.chapters[String(chapterNumber)] || ''
+  const previousWritten = previous ? {
+    kind: 'written_excerpt',
+    title: previousPlan?.title || `第${chapterNumber - 1}章`,
+    plan_summary: previousPlan?.summary || '',
+    excerpt: previous.excerpt,
+    truncated: previous.truncated,
+    excerpt_start: previous.excerptStart,
+  } : null
   return {
     writing_context: {
-      task,
-      position: { intent: 'append', chapter_number: chapterNumber, reading_intent: 'chapter_before' },
-      count: 1,
-      target_word_count: currentPlan?.targetWordCount || project.wordNumber,
-      user_guidance: guidance,
-      setting: {
+      position: {
+        version: 1,
+        intent: task === 'write_chapter_by_ai' ? 'chapter_before' : 'append',
+        target_type: task === 'write_chapter_by_ai' ? 'chapter' : 'scene',
+        order: [chapterNumber],
+      },
+      plan: [{
+        resource_type: 'novel',
         title: project.title,
         genre: formatGenre(project.genre),
         tone: project.tone,
-        target_audience: project.targetAudience,
-        core_idea: project.coreIdea || project.characterDynamics,
-        core_seed: project.coreSeed,
-        worldview: project.worldBuilding,
-        plot: project.fullPlot || project.plotArchitecture,
-        summary: project.bookSummary || project.plotArchitecture,
         writing_style: project.writingStyle,
         narrative_pov: project.narrativePov,
         era_background: project.eraBackground,
-        number_of_chapters: project.numberOfChapters,
+        target_audience: project.targetAudience,
         words_per_chapter: project.wordNumber,
+        content_semantics: 'design_plan',
+        core_seed: project.coreSeed,
+        core_idea: project.coreIdea || project.characterDynamics,
+        worldview: project.worldBuilding,
+        plot: project.fullPlot || project.plotArchitecture,
+        summary: project.bookSummary || project.plotArchitecture,
+      }, ...(currentPlan ? [{
+        resource_type: 'chapter',
+        title: currentPlan.title,
+        order_index: chapterNumber,
+        content_semantics: 'design_plan',
+        planning: planningFields(currentPlan),
+      }] : [])],
+      neighbors: {
+        previous: previousPlan ? {
+          resource_type: 'chapter',
+          title: previousPlan.title,
+          content_semantics: 'design_plan',
+          planning: {
+            goal: previousPlan.goal,
+            start_state: previousPlan.startState,
+            end_state: previousPlan.endState,
+            must_avoid: previousPlan.mustAvoid,
+          },
+        } : null,
+        next: null,
       },
-      design_plan: project.fullPlot || project.plotArchitecture,
-      current_plan: currentPlan,
-      previous_plan_end_state: previousPlan?.endState || '',
-      previous_text: previous.text,
-      previous_text_truncated: previous.truncated,
-      saved_summary: project.globalSummary || '',
-      known_end_state: project.characterState || '',
-      facts: { values: {}, unknown: [], blockers: [] },
-      entity_ids: '本次没有人物、势力、地点、物品或规则的正式业务 ID。pov_character_id 必须为 null，不要编造 ID。',
+      existing_children: [],
+      previous_written: previousWritten,
+      selected_entities: [],
+      relations: [],
+      volume_states: [],
+      search_results: [],
+      edit_target: task === 'write_chapter_by_ai' && savedChapter ? {
+        content: savedChapter,
+        content_semantics: 'edit_target',
+      } : null,
+      user_guidance: guidance,
+      count: 1,
+      count_mode: 'fixed',
+      target_word_count: currentPlan?.targetWordCount || project.wordNumber,
+      truncation: {
+        previous_excerpt_limit: NOVEL_PREVIOUS_TEXT_CHARS,
+        previous_truncated: Boolean(previous?.truncated),
+      },
+      id_policy: '本次没有人物、势力、地点、物品或规则的正式业务 ID。pov_character_id 必须为 null，不要编造 ID。',
     },
     prepared_context: {
-      adopted: ['已保存设定', '压缩故事', previous.text ? '上一章正文' : '无前章正文'],
+      adopted: ['已保存设定', '压缩故事', previousWritten ? '上一章正文' : '无前章正文'],
       missing_required: [],
       count: 1,
       note: '织界把已保存的设定和正文直接交给这一章，不调用书库读取工具。',

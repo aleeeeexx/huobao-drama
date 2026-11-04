@@ -1,8 +1,6 @@
-本目录是 YILING0013/AI_NovelGenerator（main）的片段，不是织界原创。
+本目录的建书、章计划和正文提示词取自私有仓库 https://github.com/aleeeeexx/AI_NovelGenerator 的 main 快照，不是织界原创，也不是另行对照公开的 YILING0013 副本。
 
-来源：https://github.com/YILING0013/AI_NovelGenerator
-提交：a61674fad4dd6c4c5fa9a2ad2f12b667109e628a
-许可证：GNU Affero General Public License v3.0，全文见同目录 LICENSE。
+该私有树携带上游 GNU AGPL v3.0，全文见同目录 LICENSE。织界写章以这份私有快照为对照权威。
 
 纳入范围：
 - defaults/create_novel_by_ai.json 及其 prompt / text_prompt / schema_prompt

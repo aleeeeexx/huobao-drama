@@ -129,6 +129,8 @@ test('continuation uses the saved previous chapter inside the write prompt', asy
   assert.match(prompt, /甲甲甲/)
   assert.match(prompt, /正文使用第一人称/)
   assert.match(prompt, /写下推门的后果/)
+  assert.match(prompt, /"kind":"written_excerpt"/)
+  assert.match(prompt, /"previous_excerpt_limit":6000/)
   assert.equal(prompt.includes('前章结尾段'), false)
   const previous = project().chapters['1']
   assert.equal(prompt.includes(previous), true)
@@ -138,7 +140,7 @@ test('continuation uses the saved previous chapter inside the write prompt', asy
     openingPrompts.push(prompt)
     return '雨还在下。'
   })
-  assert.match(openingPrompts[0], /"previous_text":""/)
+  assert.match(openingPrompts[0], /"previous_written":null/)
   assert.equal(openingPrompts[0].includes('灯花爆了一下'), false)
 })
 
@@ -151,9 +153,11 @@ test('a long previous chapter keeps its ending and marks the cut', async () => {
     prompts.push(prompt)
     return '我推开了门。'
   })
-  assert.match(prompts[0], /前文开头已截断/)
+  assert.match(prompts[0], /"truncated":true/)
+  assert.match(prompts[0], /"previous_excerpt_limit":6000/)
   assert.match(prompts[0], /结尾标记还在门外/)
   assert.equal(prompts[0].includes(opening), false)
+  assert.equal(prompts[0].includes('前文开头已截断'), false)
 })
 
 test('setting resumes after the compressed story and does not replace a chosen title', async () => {
