@@ -5,7 +5,7 @@
  * 调用方拿到的仍是完整字符串。
  */
 import { getTextConfig, getTextProviderBaseUrl, type AIConfig } from '../ai.js'
-import { installThinkingOffFetch } from '../../agents/thinking-off.js'
+import { installCodeccUserAgentFetch, installThinkingOffFetch } from '../../agents/thinking-off.js'
 import { logTaskWarn } from '../../utils/task-logger.js'
 import { NOVEL_MAX_TOKENS } from './generator.js'
 
@@ -28,14 +28,15 @@ export async function completeNovelPrompt(prompt: string, deps?: NovelCompletion
   const provider = config.provider.toLowerCase()
   const baseURL = getTextProviderBaseUrl(config)
   const temperature = config.temperature ?? NOVEL_TEMPERATURE
+  const outbound = installCodeccUserAgentFetch(deps?.fetchImpl)
   const patched = installThinkingOffFetch({
     providerName: provider,
     baseURL,
     enabled: (process.env.AI_DISABLE_THINKING ?? 'true').toLowerCase() !== 'false',
     patchRaw: process.env.AI_THINKING_OFF_PATCH,
-    fetchImpl: deps?.fetchImpl,
+    fetchImpl: outbound,
   })
-  const call = patched || deps?.fetchImpl || fetch
+  const call = patched || outbound
   if (provider === 'gemini') return completeGemini(call, baseURL, config.apiKey, config.model, prompt, temperature)
   return completeChat(call, baseURL, config.apiKey, config.model, prompt, temperature)
 }

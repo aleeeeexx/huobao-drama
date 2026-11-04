@@ -3,6 +3,7 @@ import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { STORAGE_ROOT } from '../utils/paths.js'
+import { applyCodeccBrowserUserAgent } from '../agents/thinking-off.js'
 
 export class VideoDownloadError extends Error {
   constructor(public code: string, message: string, public retryable = false) { super(message) }
@@ -34,7 +35,8 @@ export async function downloadVideo(url: string, taskId: number, options: {
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const signal = AbortSignal.timeout(options.timeoutMs ?? 120_000)
-      const resp = await fetch(url, { signal, headers: options.headers })
+      const downloadRequest = applyCodeccBrowserUserAgent(url, { signal, headers: options.headers })
+      const resp = await fetch(downloadRequest.input as string, downloadRequest.init)
       if (!resp.ok) {
         await resp.body?.cancel()
         throw new VideoDownloadError('download_http', `Video download HTTP ${resp.status}`, [408, 429].includes(resp.status) || resp.status >= 500)

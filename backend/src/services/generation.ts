@@ -14,6 +14,7 @@ import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { applyCodeccBrowserUserAgent } from '../agents/thinking-off.js'
 import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isOfficialXaiBase, isRetryableImageGatewayStatus, officialXaiEditsTarget, promptAfterEditsFallback, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
 
 type TaskType = 'image' | 'video'
@@ -222,9 +223,14 @@ function multipartSummary(body: FormData): string {
   return `[multipart/form-data: ${parts.join(', ')}]`
 }
 
+function providerFetch(url: string, init: { method: string; headers?: Record<string, string>; body?: BodyInit; signal?: AbortSignal }) {
+  const next = applyCodeccBrowserUserAgent(url, init)
+  return fetch(next.input as string, next.init)
+}
+
 function postProvider(url: string, method: string, headers: Record<string, string>, body: unknown) {
   const isMultipart = body instanceof FormData
-  return fetch(url, {
+  return providerFetch(url, {
     method,
     headers,
     body: isMultipart ? (body as FormData) : JSON.stringify(body),
@@ -463,7 +469,7 @@ async function pollTask(record: SysTaskRecord, config: AIConfig, taskId: string)
       const remainingMs = profile.maxDurationMs
         ? Math.max(1_000, profile.maxDurationMs - (Date.now() - startedAt))
         : 600_000
-      const resp = await fetch(url, {
+      const resp = await providerFetch(url, {
         method,
         headers,
         signal: AbortSignal.timeout(remainingMs),
@@ -633,7 +639,7 @@ export async function recoverVideoTask(id: number): Promise<void> {
       // Firemux 的交付恢复是独立接口；只在其明确返回交付失败时调用。
       if (record.provider === 'minimax' && (record.errorCode === 'delivery_failed' || record.stage === 'transferring') && !record.resultUrl) {
         const req = getVideoAdapter('minimax').buildPollRequest(originalConfig, record.taskId!)
-        const resp = await fetch(`${req.url}/recover`, { method: 'POST', headers: req.headers, signal: AbortSignal.timeout(30_000) })
+        const resp = await providerFetch(`${req.url}/recover`, { method: 'POST', headers: req.headers, signal: AbortSignal.timeout(30_000) })
         if (!resp.ok) throw new Error(`Video delivery recovery HTTP ${resp.status}`)
       }
       await markPolling(id, record.taskId!)

@@ -18,7 +18,7 @@ import { loadAgentSkills, skillWorkspaces } from './skills.js'
 import { loadAgentPromptFile, loadBasePromptFile } from './prompts.js'
 import { buildLanguageDirective } from './language.js'
 import { getContentLanguageFromRC } from './context.js'
-import { installThinkingOffFetch } from './thinking-off.js'
+import { installCodeccUserAgentFetch, installThinkingOffFetch } from './thinking-off.js'
 
 // Default prompts (used when workspace/prompts/<type>.md 文件缺失时兜底)
 export const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
@@ -247,16 +247,19 @@ async function getModel(fileModel: string | undefined, modelOverride?: string, t
     })
   }
 
-  // 叠加请求补丁：thinking-off（非官方端点，按网关裁掉不接受的字段）+ 配置温度 + 输出上限（非官方 OpenAI）
+  // 叠加请求补丁：codecc 浏览器 UA + thinking-off（非官方端点，按网关裁掉不接受的字段）+ 配置温度 + 输出上限（非官方 OpenAI）
+  const outboundFetch = installCodeccUserAgentFetch()
   const thinkingOffFetch = installThinkingOffFetch({
     providerName,
     baseURL: resolvedBaseURL,
     enabled: thinkingOffEnabled,
     patchRaw: process.env.AI_THINKING_OFF_PATCH,
+    fetchImpl: outboundFetch,
   })
+  const patchedFetch = thinkingOffFetch || outboundFetch
   const tempFetch = temperature !== null
-    ? createTemperatureFetch(providerName, temperature, thinkingOffFetch)
-    : thinkingOffFetch
+    ? createTemperatureFetch(providerName, temperature, patchedFetch)
+    : patchedFetch
   const fetchImpl = isOfficialOpenAIHost(resolvedBaseURL)
     ? tempFetch
     : createMaxTokensFetch(providerName, tempFetch)
