@@ -1,3 +1,7 @@
+/**
+ * 旧版摘要与角色状态提示词，生成路径已不再调用。
+ * 续写改为带上已保存正文和本章计划终点。
+ */
 export interface NovelPromptParams {
   [key: string]: string | number | undefined
 }

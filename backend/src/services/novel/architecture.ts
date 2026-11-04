@@ -1,3 +1,7 @@
+/**
+ * 旧版架构提示词，生成路径已不再调用。
+ * 织界设定、章计划和续写见 ai-novel-flow.ts。
+ */
 export interface NovelPromptParams {
   [key: string]: string | number | undefined
 }

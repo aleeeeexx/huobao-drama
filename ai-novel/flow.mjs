@@ -1,8 +1,8 @@
 /**
- * 执行 AI_NovelGenerator 的默认建书任务图 create_novel_by_ai。
+ * 执行私有 aleeeeexx/AI_NovelGenerator main 快照里的默认建书任务图 create_novel_by_ai。
  * 提示词与连线来自 vendor/ai-novel-generator（AGPL-3.0）。
- * 拼接方式对齐上游 backend/services/task_flows/llm.py：
- * 本模块只发普通 chat completion（上游 native=false），因此附上 text_prompt。
+ * 拼接方式对齐该快照 backend/services/task_flows/llm.py：
+ * 本模块只发普通 chat completion（native=false），因此附上 text_prompt。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
+/** 私有快照没有另附提交号。这个值只是原先记下的谱系标记，对照以 vendor 里的私有文件为准。 */
 export const AI_NOVEL_UPSTREAM_COMMIT = 'a61674fad4dd6c4c5fa9a2ad2f12b667109e628a'
 export const AI_NOVEL_FLOW_TASK = 'create_novel_by_ai'
 

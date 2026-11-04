@@ -1,13 +1,12 @@
-本目录是 YILING0013/AI_NovelGenerator（main）的片段，不是织界原创。
+本目录的建书、章计划和正文提示词取自私有仓库 https://github.com/aleeeeexx/AI_NovelGenerator 的 main 快照，不是织界原创，也不是另行对照公开的 YILING0013 副本。
 
-来源：https://github.com/YILING0013/AI_NovelGenerator
-提交：a61674fad4dd6c4c5fa9a2ad2f12b667109e628a
-许可证：GNU Affero General Public License v3.0，全文见同目录 LICENSE。
+该私有树携带上游 GNU AGPL v3.0，全文见同目录 LICENSE。织界写章以这份私有快照为对照权威。
 
-纳入范围仅限默认建书任务 `create_novel_by_ai`：
-- defaults/create_novel_by_ai.json
-- 该图引用的 prompt / text_prompt / schema_prompt
+纳入范围：
+- defaults/create_novel_by_ai.json 及其 prompt / text_prompt / schema_prompt
+- defaults/plan_chapters_by_ai_story_prompt.md、plan_chapters_by_ai_output.md
+- defaults/write_chapter_by_ai_story_prompt.md
 
-`ai-novel/` 用 Node 执行这张图，结果写入本模块自己的 SQLite。上游完整程序（FastAPI、MongoDB 副本集、Next.js、PySide6）不在本目录。织界原有 `/novel` 与 `/play` 不使用这些文件。
+`ai-novel/` 用 Node 执行建书图，结果写入本模块自己的 SQLite。织界 `/novel` 与 `/play` 的设定、本章计划和正文续写读取上述提示词，不启动上游的 FastAPI、MongoDB 或 Next.js。
 
 修改或通过网络提供这些提示词与任务图时，请遵守 AGPL v3.0，包括向用户提供对应源代码。

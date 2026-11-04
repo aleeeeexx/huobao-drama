@@ -1,6 +1,6 @@
 /**
  * 织界对局编排。
- * 玩家看到的章节走火宝小说的架构、整本大纲、草稿、字数不足时的扩写和定稿。
+ * 玩家看到的章节走织界设定、本章计划和正文续写。
  * 短剧剧本是下一步：script_rewriter 按制作台原句把原稿改成剧本。
  * extractor 同步资产，插画用 prompt_generator 的场景提示词，
  * 影像用 storyboard_breaker 追加本幕分镜，再由 prompt_generator 写视频提示词。
@@ -34,6 +34,7 @@ import {
   exportNovelToText,
   NOVEL_MAX_TOKENS,
   produceNovelChapter,
+  settleNovelProject,
   type NovelProject,
 } from '../novel/generator.js'
 import { STUDIO_SCRIPT_REWRITE_MESSAGE } from '../studio-script.js'
@@ -201,7 +202,7 @@ export async function narrateSession(
   body: { mode?: unknown; choice_id?: unknown; text?: unknown },
   onDelta: (text: string) => Promise<void> | void,
 ) {
-  // 章节按火宝小说整章写完再落库。游玩页只展示落库正文，不把半截草稿推到页面上。
+  // 章节按织界流水线写完再落库。游玩页只展示落库正文，不把半截草稿推到页面上。
   void onDelta
   // 占坑必须发生在 await 之前。两个开场请求若都先越过检查再等待读档,
   // 会各跑一遍 Agent;失败时页面会连着弹出两次「这一幕没有写完」。
@@ -409,12 +410,12 @@ function readNovelProject(raw: string | null | undefined, world: { title: string
   try {
     const parsed = JSON.parse(raw) as Partial<NovelProject>
     if (!parsed || typeof parsed !== 'object') return seed
-    return {
+    return settleNovelProject({
       ...seed,
       ...parsed,
       chapters: parsed.chapters && typeof parsed.chapters === 'object' ? parsed.chapters : {},
       userGuidance: parsed.userGuidance || seed.userGuidance,
-    }
+    })
   } catch {
     return seed
   }

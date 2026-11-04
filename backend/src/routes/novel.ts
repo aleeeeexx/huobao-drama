@@ -1,5 +1,5 @@
 /**
- * 小说创作页。写章走火宝小说原稿路径；剧情图和剧情视频复用织界的图片、视频任务。
+ * 小说创作页。写章走织界设定、本章计划和续写；剧情图和剧情视频复用织界的图片、视频任务。
  */
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'

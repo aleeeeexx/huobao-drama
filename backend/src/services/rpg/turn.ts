@@ -8,8 +8,7 @@ import { PLAY_STILL_PROMPT_MARK, type ReferenceKind } from './references.js'
 export const RPG_STATE_SENTINEL = '<<<RPG_STATE>>>'
 const FREE_TEXT_MAX = 400
 /**
- * 火宝小说创建项目时的默认每章字数。
- * 织界一幕给玩家看的正文按这一章写，不再压成几百字的短剧节拍。
+ * 默认每章字数。织界一幕给玩家看的正文按这一章写，不再压成几百字的短剧节拍。
  */
 export const PLAY_NOVEL_CHAPTER_CHARS = 3000
 const PLAY_NOVEL_CHAPTER_MIN_CHARS = 1800
@@ -730,7 +729,7 @@ function referenceCaption(references: Array<{ kind: ReferenceKind; name: string 
 
 /**
  * 句号落在摘录前部时丢掉半句；找不到句号就整段保留。
- * 火宝小说正文续写不用这里，它按原项目截取前章最后 800 字。
+ * 织界正文续写不用这里。它按私有 writing_context 只带上一章最后 6000 字，并用 truncated 标明是否截断。
  */
 export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EXCERPT_CHARS): string {
   const text = (recent || '').trim()
