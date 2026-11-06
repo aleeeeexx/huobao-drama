@@ -111,7 +111,11 @@
     <section class="stage">
       <div ref="logEl" class="log" @scroll.passive="onLogScroll">
       <div ref="logBody" class="log-body">
-      <p v-if="loading && !acting && !(session?.turns || []).length" class="waiting">正在推开这一局…</p>
+      <p v-if="showOpeningWait" class="waiting">正在推开这一局…</p>
+      <article v-else-if="showStalledOpening" class="turn stalled">
+        <p class="waiting">{{ stageError || '这一幕没有写出来。' }}</p>
+        <button class="btn" type="button" @click="retryOpening">再写一次</button>
+      </article>
       <article v-for="turn in session?.turns || []" :key="turn.id" class="turn">
         <p v-if="turn.player_mode === 'choice'" class="player-line">你选择了：{{ turn.player_text }}</p>
         <p v-else-if="turn.player_mode === 'free'" class="player-line">你写下：{{ turn.player_text }}</p>
@@ -206,7 +210,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { rpgAPI } from '~/composables/useApi'
-import { toastError } from '~/composables/useToast'
+import { mapError, toastError } from '~/composables/useToast'
 import { shareOpening } from '~/utils/rpg-opening'
 
 const route = useRoute()
@@ -214,6 +218,8 @@ const sessionId = computed(() => Number(route.params.sessionId))
 const session = ref<any>(null)
 const loading = ref(true)
 const acting = ref(false)
+const awaitingOpening = ref(false)
+const stageError = ref('')
 const freeText = ref('')
 const pendingAction = ref('')
 const mediaBusy = ref<Record<string, true>>({})
@@ -232,6 +238,9 @@ const PLATE_POLL_LIMIT = 60
 
 useHead(() => ({ title: session.value?.title ? `${session.value.title} · 织界` : '织界' }))
 
+const hasTurns = computed(() => (session.value?.turns || []).length > 0)
+const showOpeningWait = computed(() => !acting.value && !hasTurns.value && !stageError.value && (loading.value || awaitingOpening.value))
+const showStalledOpening = computed(() => !acting.value && !hasTurns.value && !loading.value && (!!stageError.value || !awaitingOpening.value))
 const latest = computed(() => {
   const turns = session.value?.turns || []
   return turns[turns.length - 1] || null
@@ -404,8 +413,14 @@ function showPersistedSession(nextSession: any) {
   acting.value = false
 }
 
+function retryOpening() {
+  stageError.value = ''
+  return act({ mode: 'opening' })
+}
+
 async function act(body: { mode: string; choice_id?: string; text?: string }) {
   if (acting.value) return
+  stageError.value = ''
   acting.value = true
   stickToBottom = true
   if (body.mode === 'choice') {
@@ -454,6 +469,7 @@ async function act(body: { mode: string; choice_id?: string; text?: string }) {
     if (shouldPoll()) startPoll()
     await scrollLog()
   } catch (error) {
+    stageError.value = mapError(error, { fallback: '这一幕没有写完' })
     try {
       toastError(error, { fallback: '这一幕没有写完' })
       const nextSession = await rpgAPI.session(sessionId.value)
@@ -568,7 +584,12 @@ onMounted(async () => {
     await load()
     armPlatePoll()
     if (!session.value?.turns?.length) {
-      await shareOpening(sessionId.value, () => act({ mode: 'opening' }))
+      awaitingOpening.value = true
+      try {
+        await shareOpening(sessionId.value, () => act({ mode: 'opening' }))
+      } finally {
+        awaitingOpening.value = false
+      }
       if (!session.value?.turns?.length) {
         await load()
         armPlatePoll()
@@ -763,6 +784,7 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-xl);
 }
 .waiting { color: var(--text-3); }
+.stalled { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
 .turn { flex: none; max-width: 720px; }
 .turn .still, .turn .clip { max-width: 520px; }
 .player-line { color: var(--accent-text); font-size: 13px; margin-bottom: 8px; }

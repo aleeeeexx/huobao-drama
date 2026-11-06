@@ -15,7 +15,7 @@ import {
   produceNovelChapter,
   type NovelProject,
 } from '../src/services/novel/generator.ts'
-import { NOVEL_PREVIOUS_TEXT_CHARS } from '../src/services/novel/ai-novel-flow.ts'
+import { NOVEL_PREVIOUS_TEXT_CHARS, parseModelJson } from '../src/services/novel/ai-novel-flow.ts'
 import { PLAY_NOVEL_CHAPTER_CHARS } from '../src/services/rpg/turn.ts'
 
 const BLUEPRINT = [
@@ -304,6 +304,16 @@ test('markdown export follows the original heading shape', () => {
   assert.match(manuscript, /《雾隐茶寮》/)
   assert.match(manuscript, /第1章 雨夜回城/)
   assert.doesNotMatch(manuscript, /【第1幕】|玩家：/)
+})
+
+test('a story cut off inside the JSON string can still be read', () => {
+  assert.deepEqual(parseModelJson('{"plot":"雨下了很久，茶寮还亮着灯。"}'), {
+    plot: '雨下了很久，茶寮还亮着灯。',
+  })
+  assert.equal(parseModelJson('```json\n{"plot":"围栏里的故事"}\n```').plot, '围栏里的故事')
+  assert.equal(parseModelJson('{"plot":"他说}还没把杯子放下').plot, '他说}还没把杯子放下')
+  assert.equal(parseModelJson('{"plot":"结尾停在半句').plot, '结尾停在半句')
+  assert.throws(() => parseModelJson('这不是 JSON'), /模型没有返回 JSON/)
 })
 
 function maxPlanned(item: NovelProject): number {

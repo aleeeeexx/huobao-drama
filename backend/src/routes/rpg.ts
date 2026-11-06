@@ -54,6 +54,7 @@ app.post('/sessions/:id/act', async (c) => {
       await stream.writeSSE({ event: 'done', data: JSON.stringify({ turn }) })
     } catch (error) {
       const message = error instanceof Error ? error.message : '这一幕没有写完'
+      console.error('[rpg] narrate', message)
       await stream.writeSSE({ event: 'error', data: JSON.stringify({ message }) })
     }
   })

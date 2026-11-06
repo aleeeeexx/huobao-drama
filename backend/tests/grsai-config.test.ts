@@ -13,7 +13,7 @@ process.env.STORAGE_PATH = path.join(root, 'static')
 process.env.MYSQL_AUTO_IMPORT = 'false'
 
 const { db, schema } = await import('../src/db/index.ts')
-const { bootstrapCodeccConfigs } = await import('../src/services/codecc-config.ts')
+const { bootstrapCodeccConfigs, codeccTextModels, CODECC_GPT_TEXT_PRIORITY } = await import('../src/services/codecc-config.ts')
 const {
   GRSAI_IMAGE_PRIORITY,
   GRSAI_OPTIONAL_PRIORITY,
@@ -39,6 +39,8 @@ const ENV_KEYS = [
   'CODECC_TEXT_MODEL',
   'CODECC_IMAGE_MODEL',
   'CODECC_VIDEO_MODEL',
+  'CODECC_GPT_API_KEY',
+  'CODECC_GPT_BASE_URL',
 ] as const
 
 function setEnv(values: Partial<Record<(typeof ENV_KEYS)[number], string>> = {}) {
@@ -48,6 +50,38 @@ function setEnv(values: Partial<Record<(typeof ENV_KEYS)[number], string>> = {})
 
 const named = (name: string) => db.select().from(schema.aiServiceConfigs)
   .where(eq(schema.aiServiceConfigs.name, name))
+
+test('gpt-6.1 models use a separate key and do not replace the grok text channel', async () => {
+  assert.deepEqual(codeccTextModels(), ['grok-4.7'])
+  assert.deepEqual(codeccTextModels('  custom-text '), ['custom-text'])
+  setEnv({
+    CODECC_API_KEY: 'grok-key',
+    CODECC_GPT_API_KEY: 'gpt-key',
+    CODECC_GPT_BASE_URL: 'https://codecc.cc///',
+  })
+  const logs: string[] = []
+  const originalLog = console.log
+  console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
+  try {
+    await bootstrapCodeccConfigs()
+  } finally {
+    console.log = originalLog
+  }
+  assert.equal(logs.some(line => line.includes('gpt-key') || line.includes('grok-key')), false)
+  const grok = (await named('codecc-text'))[0]
+  const gpt = (await named('codecc-gpt-text'))[0]
+  assert.equal(grok.apiKey, 'grok-key')
+  assert.equal(grok.model, JSON.stringify(['grok-4.7']))
+  assert.equal(grok.priority, 100)
+  assert.equal(gpt.apiKey, 'gpt-key')
+  assert.equal(gpt.baseUrl, 'https://codecc.cc')
+  assert.equal(gpt.model, JSON.stringify(['gpt-6.1-sol', 'gpt-6.1-terra']))
+  assert.equal(gpt.priority, CODECC_GPT_TEXT_PRIORITY)
+  assert.equal(gpt.isDefault, false)
+  assert.equal(gpt.isActive, true)
+  assert.equal((await getActiveConfig('text'))?.id, grok.id)
+  assert.notEqual(gpt.apiKey, grok.apiKey)
+})
 
 test('missing key skips bootstrap and leaves an existing row untouched', async () => {
   setEnv()
@@ -109,6 +143,8 @@ test('startup upserts grsai-image above codecc and keeps text on codecc', async 
   assert.equal(activeImage?.model, 'gpt-image-2.5')
   const activeText = await getActiveConfig('text')
   assert.equal(activeText?.model, 'grok-4.7')
+  assert.equal((await named('codecc-text'))[0].model, JSON.stringify(['grok-4.7']))
+  assert.equal((await named('codecc-text'))[0].apiKey, 'codecc-test-key')
   assert.notEqual(activeText?.id, image.id)
 
   const codeccImage = (await named('codecc-image'))[0]
@@ -188,6 +224,7 @@ test('repeat startup updates the same row; video becomes the active grsai channe
 
   setEnv({ GRSAI_API_KEY: 'only-grsai', GRSAI_TEXT_MODEL: 'solo-text' })
   await db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.name, 'codecc-text'))
+  await db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.name, 'codecc-gpt-text'))
   await bootstrapGrsaiConfigs()
   assert.equal((await getActiveConfig('text'))?.model, 'solo-text')
   const paused = (await named('grsai-video'))[0]

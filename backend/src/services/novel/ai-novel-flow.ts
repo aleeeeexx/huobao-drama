@@ -170,21 +170,88 @@ function buildNodePrompt(node: FlowNode, inputs: Record<string, unknown>, schema
   return prompt
 }
 
+function jsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/** 字符串还没闭合时，后面的括号属于正文，不能拿去截断 JSON。 */
+function jsonStringIsOpen(text: string): boolean {
+  let inString = false
+  let escaped = false
+  for (const char of text) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\' && inString) {
+      escaped = true
+      continue
+    }
+    if (char === '"') inString = !inString
+  }
+  return inString
+}
+
+/**
+ * 长故事有时在 JSON 字符串里被截断，末尾没有引号和右括号。
+ * 只补上未闭合的引号和还缺的括号，让已经写完的正文还能用。
+ */
+function closeTruncatedJson(text: string): string {
+  let out = text.trimEnd()
+  if (out.endsWith('\\')) out = out.slice(0, -1)
+  if (jsonStringIsOpen(out)) out += '"'
+  let braces = 0
+  let brackets = 0
+  let inString = false
+  let escaped = false
+  for (const char of out) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\' && inString) {
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (char === '{') braces += 1
+    else if (char === '}') braces = Math.max(0, braces - 1)
+    else if (char === '[') brackets += 1
+    else if (char === ']') brackets = Math.max(0, brackets - 1)
+  }
+  while (brackets > 0) {
+    out += ']'
+    brackets -= 1
+  }
+  while (braces > 0) {
+    out += '}'
+    braces -= 1
+  }
+  return out
+}
+
 export function parseModelJson(raw: string): Record<string, unknown> {
   let text = String(raw || '').trim()
   const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)```$/i)
   if (fenced) text = fenced[1].trim()
   const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start >= 0 && end > start) text = text.slice(start, end + 1)
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    throw new Error('模型没有返回 JSON')
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('模型没有返回 JSON')
-  return parsed as Record<string, unknown>
+  if (start < 0) throw new Error('模型没有返回 JSON')
+  const fromObject = text.slice(start)
+  const end = fromObject.lastIndexOf('}')
+  const closed = end > 0 ? fromObject.slice(0, end + 1) : ''
+  const parsed = (closed && jsonObject(closed)) || jsonObject(closeTruncatedJson(fromObject))
+  if (!parsed) throw new Error('模型没有返回 JSON')
+  return parsed
 }
 
 function requiredText(value: unknown, label: string): string {
