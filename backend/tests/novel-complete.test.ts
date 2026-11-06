@@ -202,6 +202,86 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.deepEqual(requests[0].body.thinking, { type: 'disabled' })
   })
 
+  test('falls back to the next text config when the active one is unavailable', async () => {
+    const { fetchImpl, requests } = scriptedFetch([
+      { status: 503, body: '{"error":{"message":"Service temporarily unavailable","type":"api_error"}}' },
+      { body: chatStream(['备用写完']) },
+    ])
+    const text = await completeNovelPrompt(PROMPT, {
+      configs: [
+        textConfig({ model: 'grok-4.7', apiKey: 'grok-key' }),
+        textConfig({ model: 'gpt-6.1-sol', apiKey: 'gpt-key' }),
+      ],
+      fetchImpl,
+    })
+    assert.equal(text, '备用写完')
+    assert.equal(requests.length, 2)
+    assert.equal(requests[0].body.model, 'grok-4.7')
+    assert.equal(requests[1].body.model, 'gpt-6.1-sol')
+    assert.equal(requests[1].init.headers.Authorization, 'Bearer gpt-key')
+  })
+
+  test('retries a dropped connection and then reads the next text config', async () => {
+    const models: string[] = []
+    const fetchImpl = (async (_input: unknown, init?: { body?: string }) => {
+      const model = JSON.parse(String(init?.body || '{}')).model as string
+      models.push(model)
+      if (model === 'grok-4.7') {
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect'), { code: 'ETIMEDOUT' }) })
+      }
+      return new Response(chatStream(['备用写完']), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+      })
+    }) as typeof fetch
+    const text = await completeNovelPrompt(PROMPT, {
+      configs: [
+        textConfig({ model: 'grok-4.7', apiKey: 'grok-key' }),
+        textConfig({ model: 'gpt-6.1-sol', apiKey: 'gpt-key' }),
+      ],
+      fetchImpl,
+    })
+    assert.equal(text, '备用写完')
+    assert.deepEqual(models, ['grok-4.7', 'grok-4.7', 'gpt-6.1-sol'])
+  })
+
+  test('says the model service is unreachable when every text config fails to connect', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      throw new TypeError('fetch failed')
+    }) as typeof fetch
+    await assert.rejects(
+      () => completeNovelPrompt(PROMPT, {
+        configs: [
+          textConfig({ model: 'grok-4.7' }),
+          textConfig({ model: 'gpt-6.1-sol' }),
+        ],
+        fetchImpl,
+      }),
+      { message: '模型服务暂时连不上，请再试一次' },
+    )
+    assert.equal(calls, 4)
+  })
+
+  test('does not switch text config after an auth failure', async () => {
+    const { fetchImpl, requests } = scriptedFetch([
+      { status: 401, body: '{"error":{"message":"bad key"}}' },
+      { body: chatStream(['不该请求']) },
+    ])
+    await assert.rejects(
+      () => completeNovelPrompt(PROMPT, {
+        configs: [
+          textConfig({ model: 'grok-4.7' }),
+          textConfig({ model: 'gpt-6.1-sol' }),
+        ],
+        fetchImpl,
+      }),
+      /小说章节生成失败（401）/,
+    )
+    assert.equal(requests.length, 1)
+  })
+
   test('retries a 524 once and then returns the streamed text', async () => {
     const { fetchImpl, requests } = scriptedFetch([
       { status: 524, body: '<html>error 524</html>' },

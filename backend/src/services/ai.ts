@@ -62,39 +62,50 @@ export function getTextProviderBaseUrl(config: AIConfig) {
 const lastLoggedActiveConfigKey = new Map<string, string>()
 const lastLoggedConfigByIdKey = new Map<number, string>()
 
-export async function getActiveConfig(serviceType: ServiceType): Promise<AIConfig | null> {
-  const rows = (await db.select().from(schema.aiServiceConfigs)
+async function activeOfficialRows(serviceType: ServiceType) {
+  return (await db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, serviceType))
   )
-    .filter(r => r.isActive && isOfficialProvider(serviceType, r.provider))
-    .sort((a, b) => (b.priority || 0) - (a.priority || 0)) // 高优先级优先
+    .filter(row => row.isActive && isOfficialProvider(serviceType, row.provider))
+    .sort((left, right) => (right.priority || 0) - (left.priority || 0))
+}
 
-  const active = rows[0]
+function rowToAIConfig(row: typeof schema.aiServiceConfigs.$inferSelect): AIConfig {
+  const models = row.model ? JSON.parse(row.model) : []
+  return {
+    id: row.id,
+    provider: row.provider || '',
+    baseUrl: row.baseUrl,
+    apiKey: row.apiKey,
+    model: models[0] || '',
+    temperature: parseConfigTemperature(row.settings),
+  }
+}
+
+export async function listActiveConfigs(serviceType: ServiceType): Promise<AIConfig[]> {
+  return (await activeOfficialRows(serviceType)).map(rowToAIConfig)
+}
+
+export async function getActiveConfig(serviceType: ServiceType): Promise<AIConfig | null> {
+  const active = (await activeOfficialRows(serviceType))[0]
   if (!active) {
     logTaskWarn('AIConfig', 'active-config-missing', { serviceType })
     return null
   }
 
-  const models = active.model ? JSON.parse(active.model) : []
-  const logKey = `${active.id}:${models[0] || ''}`
+  const config = rowToAIConfig(active)
+  const logKey = `${active.id}:${config.model}`
   if (lastLoggedActiveConfigKey.get(serviceType) !== logKey) {
     lastLoggedActiveConfigKey.set(serviceType, logKey)
     logTaskProgress('AIConfig', 'active-config-selected', {
       serviceType,
       configId: active.id,
       provider: active.provider,
-      model: models[0] || '',
+      model: config.model,
       priority: active.priority,
     })
   }
-  return {
-    id: active.id,
-    provider: active.provider || '',
-    baseUrl: active.baseUrl,
-    apiKey: active.apiKey,
-    model: models[0] || '',
-    temperature: parseConfigTemperature(active.settings),
-  }
+  return config
 }
 
 export async function getTextConfig(): Promise<AIConfig> {
@@ -107,12 +118,7 @@ export async function getTextConfig(): Promise<AIConfig> {
  * 取某服务类型当前启用且优先级最高的官方配置 ID（创建集时自动锁定用）
  */
 export async function getActiveConfigId(serviceType: ServiceType): Promise<number | null> {
-  const rows = (await db.select().from(schema.aiServiceConfigs)
-    .where(eq(schema.aiServiceConfigs.serviceType, serviceType))
-  )
-    .filter(r => r.isActive && isOfficialProvider(serviceType, r.provider))
-    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
-  return rows[0]?.id ?? null
+  return (await activeOfficialRows(serviceType))[0]?.id ?? null
 }
 
 export async function getConfigById(id: number): Promise<AIConfig | null> {

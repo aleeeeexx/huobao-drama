@@ -4,7 +4,7 @@
  * 长生成用流式响应再拼回全文，避免非流式请求被中间代理空闲超时（524）掐断。
  * 调用方拿到的仍是完整字符串。
  */
-import { getTextConfig, getTextProviderBaseUrl, type AIConfig } from '../ai.js'
+import { getTextProviderBaseUrl, listActiveConfigs, type AIConfig } from '../ai.js'
 import { installCodeccUserAgentFetch, installThinkingOffFetch } from '../../agents/thinking-off.js'
 import { logTaskWarn } from '../../utils/task-logger.js'
 import { NOVEL_MAX_TOKENS } from './generator.js'
@@ -12,23 +12,72 @@ import { NOVEL_MAX_TOKENS } from './generator.js'
 /** 文本服务若单独配了温度，以服务配置为准；否则用 0.7。 */
 const NOVEL_TEMPERATURE = 0.7
 const NOVEL_TIMEOUT_MS = 600_000
-/** 524、空正文，以及流里的 upstream_error，各再试一次。长生成一次就要一两分钟，不再加次数。 */
+/** 524、空正文、连不上模型，以及流里的 upstream_error，各再试一次。长生成一次就要一两分钟，不再加次数。 */
 const NOVEL_COMPLETION_ATTEMPTS = 2
 const NOVEL_COMPLETION_RETRY_DELAY_MS = 500
 const EMPTY_NOVEL_RESULT = '小说章节没有写出来'
+const MODEL_UNREACHABLE = '模型服务暂时连不上，请再试一次'
+const CONNECT_FAILURE_CODES = new Set([
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+])
 
 export interface NovelCompletionDependencies {
-  config: AIConfig
-  fetchImpl: typeof fetch
+  config?: AIConfig
+  /** 按优先级排列。当前文本通道 502/503/524 时，改用下一条。 */
+  configs?: AIConfig[]
+  fetchImpl?: typeof fetch
+}
+
+/** 当前通道暂时不可用时，才换下一条已启用的文本配置。鉴权失败和内容错误不换。 */
+function unavailableStatus(error: unknown): number | null {
+  if (!(error instanceof Error)) return null
+  const matched = error.message.match(/^小说章节生成失败（(502|503|524)）$/)
+  return matched ? Number(matched[1]) : null
+}
+
+async function textConfigsForPrompt(deps?: NovelCompletionDependencies): Promise<AIConfig[]> {
+  if (deps?.configs?.length) return deps.configs
+  if (deps?.config) return [deps.config]
+  const configs = await listActiveConfigs('text')
+  if (!configs.length) throw new Error('未配置文本模型，请先到「设置」页添加并启用 AI 服务')
+  return configs
 }
 
 /** 调用方只传 prompt。deps 只给测试注入文本配置和 fetch。 */
 export async function completeNovelPrompt(prompt: string, deps?: NovelCompletionDependencies): Promise<string> {
-  const config = deps?.config ?? await getTextConfig()
+  const configs = await textConfigsForPrompt(deps)
+  let lastError: unknown
+  for (let index = 0; index < configs.length; index += 1) {
+    const config = configs[index]
+    try {
+      return await completeWithConfig(prompt, config, deps?.fetchImpl)
+    } catch (error) {
+      lastError = error
+      const status = unavailableStatus(error)
+      const connectFailed = isConnectFailure(error)
+      const next = configs[index + 1]
+      if ((!status && !connectFailed) || !next) throw novelCallError(error)
+      logTaskWarn('Novel', 'text-config-fallback', {
+        status: status ?? 'connect',
+        fromModel: config.model,
+        toModel: next.model,
+      })
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(EMPTY_NOVEL_RESULT)
+}
+
+async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: typeof fetch): Promise<string> {
   const provider = config.provider.toLowerCase()
   const baseURL = getTextProviderBaseUrl(config)
   const temperature = config.temperature ?? NOVEL_TEMPERATURE
-  const outbound = installCodeccUserAgentFetch(deps?.fetchImpl)
+  const outbound = installCodeccUserAgentFetch(fetchImpl)
   const patched = installThinkingOffFetch({
     providerName: provider,
     baseURL,
@@ -149,12 +198,25 @@ class NovelUpstreamError extends Error {
   }
 }
 
-function novelRetryReason(error: unknown): '524' | 'empty' | 'upstream' | null {
+function novelRetryReason(error: unknown): '524' | 'empty' | 'upstream' | 'connect' | null {
   if (error instanceof NovelUpstreamError) return 'upstream'
   if (!(error instanceof Error)) return null
   if (error.message === EMPTY_NOVEL_RESULT) return 'empty'
   if (error.message === '小说章节生成失败（524）') return '524'
+  if (isConnectFailure(error)) return 'connect'
   return null
+}
+
+function isConnectFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.message === 'fetch failed') return true
+  const cause = (error as { cause?: { code?: unknown } }).cause
+  return !!cause && CONNECT_FAILURE_CODES.has(String(cause.code || ''))
+}
+
+function novelCallError(error: unknown): Error {
+  if (isConnectFailure(error)) return new Error(MODEL_UNREACHABLE)
+  return error instanceof Error ? error : new Error(EMPTY_NOVEL_RESULT)
 }
 
 function requireNovelText(text: string): string {

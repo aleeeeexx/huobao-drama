@@ -21,7 +21,7 @@ const {
   bootstrapGrsaiConfigs,
   readGrsaiEnv,
 } = await import('../src/services/grsai-config.ts')
-const { getActiveConfig } = await import('../src/services/ai.ts')
+const { getActiveConfig, listActiveConfigs } = await import('../src/services/ai.ts')
 const { joinProviderUrl } = await import('../src/services/adapters/url.ts')
 
 after(async () => {
@@ -80,6 +80,7 @@ test('gpt-6.1 models use a separate key and do not replace the grok text channel
   assert.equal(gpt.isDefault, false)
   assert.equal(gpt.isActive, true)
   assert.equal((await getActiveConfig('text'))?.id, grok.id)
+  assert.deepEqual((await listActiveConfigs('text')).map(config => config.model), ['grok-4.7', 'gpt-6.1-sol'])
   assert.notEqual(gpt.apiKey, grok.apiKey)
 })
 
@@ -246,5 +247,5 @@ test('repeat startup updates the same row; video becomes the active grsai channe
 
 test('server start calls grsai bootstrap next to codecc', () => {
   const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(index, /await bootstrapCodeccConfigs\(\)\s+await bootstrapGrsaiConfigs\(\)/)
+  assert.match(index, /await bootstrapCodeccConfigs\(\)\s+await bootstrapGrsaiConfigs\(\)\s+await bootstrapNovarisConfigs\(\)/)
 })

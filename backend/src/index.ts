@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
@@ -29,9 +30,14 @@ import aiNovel, { proxyAiNovelApp } from './routes/aiNovel.js'
 import { AI_NOVEL_MOUNT, ensureAiNovelSidecar } from './services/ai-novel-sidecar.js'
 import { bootstrapCodeccConfigs } from './services/codecc-config.js'
 import { bootstrapGrsaiConfigs } from './services/grsai-config.js'
+import { bootstrapNovarisConfigs } from './services/novaris-config.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { resumeInterruptedTasks } from './services/generation.js'
 import { DATA_ROOT } from './utils/paths.js'
+
+/** Node 默认 250ms 就换下一个地址。到 codecc 的握手经常更慢，会被收成 fetch failed。 */
+const CONNECT_ATTEMPT_TIMEOUT_MS = 2000
+setDefaultAutoSelectFamilyAttemptTimeout(CONNECT_ATTEMPT_TIMEOUT_MS)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -105,6 +111,7 @@ app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 const port = Number(process.env.PORT || 5679)
 await bootstrapCodeccConfigs()
 await bootstrapGrsaiConfigs()
+await bootstrapNovarisConfigs()
 console.log(`🚀 幻书 TS server on http://localhost:${port}`)
 
 await resumeInterruptedTasks()
