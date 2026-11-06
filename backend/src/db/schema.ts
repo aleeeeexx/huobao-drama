@@ -317,9 +317,9 @@ export const rpgSessions = sqliteTable('rpg_sessions', {
   title: text('title').notNull(),
   status: text('status').notNull().default('active'),
   worldState: text('world_state').notNull(),
-  /** 织界小说项目：设定、章计划、章节正文、前文摘要、本章终点 */
+  /** 织界续写用的设定、章计划、章节正文、前文摘要、本章终点 */
   novelState: text('novel_state'),
-  /** rpg：互动续写。novel：独立小说创作页。 */
+  /** rpg：织界。novel：已下线的独立小说页留下的行，织界不打开。 */
   playKind: text('play_kind').notNull().default('rpg'),
   turnCount: integer('turn_count').default(0),
   createdAt: text('created_at').notNull(),

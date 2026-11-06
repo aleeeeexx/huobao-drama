@@ -34,21 +34,9 @@
   "layout": {
     "nav": {
       "play": "Play",
-      "novel": "Novel",
-      "novelTitle": "In-app novels: write chapters from the manuscript, with story art and video",
-      "aiNovel": "AI Books",
-      "aiNovelTitle": "Side module: turn an idea into a story direction. Does not replace Novel",
       "studio": "Studio",
       "projects": "Projects",
       "settings": "Settings"
-    },
-    "aiNovelPage": {
-      "connecting": "Opening the side book module…",
-      "unavailable": "AI Books is not connected",
-      "hint": "The server starts this module on launch. If you just opened the app, wait a few seconds and try again. If it still fails, run the command below from the repo root, then retry.",
-      "command": "cd ai-novel && npm start",
-      "retry": "Retry",
-      "frameTitle": "AI Books"
     },
     "banner": {
       "missing": "{types} model not configured yet. AI features are unavailable.",

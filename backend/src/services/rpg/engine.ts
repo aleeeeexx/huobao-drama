@@ -174,7 +174,7 @@ export async function createSession(input: {
 
 export async function getSession(sessionId: number) {
   const [session] = await db.select().from(schema.rpgSessions).where(eq(schema.rpgSessions.id, sessionId))
-  if (!session) return null
+  if (!session || session.playKind === NOVEL_PLAY_KIND) return null
   const [world] = await db.select().from(schema.rpgWorlds).where(eq(schema.rpgWorlds.id, session.worldId))
   const turns = await db.select().from(schema.rpgTurns)
     .where(eq(schema.rpgTurns.sessionId, sessionId))
@@ -210,7 +210,6 @@ export async function narrateSession(
   actingSessions.add(sessionId)
   try {
     const loaded = await loadPlay(sessionId)
-    if (loaded.session.playKind === NOVEL_PLAY_KIND) throw new Error('这是一本小说，请到小说创作页写下一章')
     const resolved = resolvePlayerAction(body, loaded.latestChoices, loaded.turns.length > 0)
     if (!resolved.ok) throw new Error(resolved.message)
 
@@ -723,7 +722,7 @@ function turnForMedia(loaded: PlayContext, turnId: number | undefined, emptyMess
 
 async function loadPlay(sessionId: number): Promise<PlayContext> {
   const [session] = await db.select().from(schema.rpgSessions).where(eq(schema.rpgSessions.id, sessionId))
-  if (!session) throw new Error('这局游戏不存在')
+  if (!session || session.playKind === NOVEL_PLAY_KIND) throw new Error('这局游戏不存在')
   const [world] = await db.select().from(schema.rpgWorlds).where(eq(schema.rpgWorlds.id, session.worldId))
   if (!world) throw new Error('世界不存在')
   const turns = await db.select().from(schema.rpgTurns)

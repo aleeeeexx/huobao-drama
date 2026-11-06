@@ -27,11 +27,6 @@ export default defineNuxtConfig({
           path: '/play/:sessionId',
           file: fileURLToPath(new URL('./app/views/rpg/play.vue', import.meta.url)),
         },
-        {
-          name: 'novel-read',
-          path: '/novel/:bookId',
-          file: fileURLToPath(new URL('./app/views/novel/read.vue', import.meta.url)),
-        },
       )
     },
   },
@@ -51,8 +46,6 @@ export default defineNuxtConfig({
       proxy: {
         '/api': { target: 'http://localhost:5679', changeOrigin: true },
         '/static': { target: 'http://localhost:5679', changeOrigin: true },
-        // 顶栏「AI 建书」里的界面。超时放开，建书 SSE 会一直开着。
-        '/ai-novel-app': { target: 'http://localhost:5679', changeOrigin: true, timeout: 0, proxyTimeout: 0 },
       },
     },
   },

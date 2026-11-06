@@ -47,8 +47,6 @@ COPY --from=backend-build /build/backend/package.json ./backend/package.json
 COPY --from=backend-build /build/backend/tsconfig.json ./backend/tsconfig.json
 # workspace 模板（skills/prompts），entrypoint copy-once 到数据卷后可在线编辑
 COPY backend/workspace ./workspace-template
-# 顶栏「AI 建书」。书库由后端改写到 HUOBAO_DATA_DIR，不依赖镜像里的 data/
-COPY ai-novel ./ai-novel
 COPY --from=frontend-build /build/frontend/.output/public ./frontend-dist
 COPY docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh && mkdir -p /app/data

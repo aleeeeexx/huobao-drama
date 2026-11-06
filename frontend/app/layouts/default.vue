@@ -20,14 +20,6 @@
           <BookOpen :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.play') }}</span>
         </NuxtLink>
-        <NuxtLink to="/novel" class="nav-link" :class="{ active: route.path === '/novel' || route.path.startsWith('/novel/') }" :title="t('layout.nav.novelTitle')">
-          <Feather :size="15" :stroke-width="1.8" />
-          <span>{{ t('layout.nav.novel') }}</span>
-        </NuxtLink>
-        <NuxtLink to="/ai-novel" class="nav-link" :class="{ active: route.path === '/ai-novel' || route.path.startsWith('/ai-novel/') }" :title="t('layout.nav.aiNovelTitle')">
-          <Library :size="15" :stroke-width="1.8" />
-          <span>{{ t('layout.nav.aiNovel') }}</span>
-        </NuxtLink>
         <NuxtLink to="/studio" class="nav-link" :class="{ active: route.path === '/studio' || route.path.startsWith('/drama') }">
           <LayoutGrid :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.studio') }}</span>
@@ -68,7 +60,7 @@
 </template>
 
 <script setup>
-import { BookOpen, Feather, Github, LayoutGrid, Library, Settings, TriangleAlert } from 'lucide-vue-next'
+import { BookOpen, Github, LayoutGrid, Settings, TriangleAlert } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { aiConfigAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/brand-logo.png'
