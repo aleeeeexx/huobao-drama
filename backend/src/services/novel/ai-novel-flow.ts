@@ -17,7 +17,7 @@ import {
 
 const SOURCE_DEFAULTS = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../../../../ai-novel/vendor/ai-novel-generator/defaults',
+  'prompt-source/defaults',
 )
 
 /** 与私有 writing_context.py 的 previous_excerpt_limit 相同。超出时只保留结尾，并用 truncated 标明。 */
@@ -106,11 +106,8 @@ export interface ParsedChapterPlan {
 let cachedFlow: FlowFile | null = null
 
 export function novelPromptDefaultsDir(): string {
-  const fromEnv = process.env.AI_NOVEL_ROOT
-  if (fromEnv) {
-    const dir = path.join(fromEnv, 'vendor', 'ai-novel-generator', 'defaults')
-    if (fs.existsSync(path.join(dir, 'create_novel_by_ai.json'))) return dir
-  }
+  const fromEnv = process.env.NOVEL_PROMPT_DEFAULTS
+  if (fromEnv && fs.existsSync(path.join(fromEnv, 'create_novel_by_ai.json'))) return path.resolve(fromEnv)
   if (fs.existsSync(path.join(SOURCE_DEFAULTS, 'create_novel_by_ai.json'))) return SOURCE_DEFAULTS
   throw new Error('找不到织界小说流程文件')
 }

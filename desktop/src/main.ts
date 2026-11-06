@@ -205,8 +205,10 @@ function startBackend(): void {
     SQLITE_PATH: path.join(currentDataDir, 'huobao.sqlite3'),
     WORKSPACE_PATH: currentWorkspaceDir,
     FRONTEND_DIST: currentFrontendDist,
-    // 顶栏「AI 建书」由后端拉起。dev 指向仓库 ai-novel/，打包后在 extraResources。
-    AI_NOVEL_ROOT: path.join(resources, 'ai-novel'),
+    // 桌面后端是单文件 bundle，续写提示词不在源码目录里。dev 读仓库，打包后在 extraResources。
+    NOVEL_PROMPT_DEFAULTS: app.isPackaged
+      ? path.join(resources, 'novel-prompts', 'defaults')
+      : path.join(REPO_ROOT, 'backend/src/services/novel/prompt-source/defaults'),
   }
   if (app.isPackaged) {
     const exe = process.platform === 'win32' ? '.exe' : ''

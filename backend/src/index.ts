@@ -25,9 +25,6 @@ import settings from './routes/settings.js'
 import storage from './routes/storage.js'
 import serverUpdate from './routes/serverUpdate.js'
 import rpg from './routes/rpg.js'
-import novel from './routes/novel.js'
-import aiNovel, { proxyAiNovelApp } from './routes/aiNovel.js'
-import { AI_NOVEL_MOUNT, ensureAiNovelSidecar } from './services/ai-novel-sidecar.js'
 import { bootstrapCodeccConfigs } from './services/codecc-config.js'
 import { bootstrapGrsaiConfigs } from './services/grsai-config.js'
 import { bootstrapNovarisConfigs } from './services/novaris-config.js'
@@ -80,20 +77,8 @@ api.route('/storage', storage)
 api.route('/settings', settings)
 api.route('/server-update', serverUpdate)
 api.route('/rpg', rpg)
-api.route('/novel', novel)
-api.route('/ai-novel', aiNovel)
 
 app.route('/api/v1', api)
-
-// 旁边的小说模块。顶栏「AI 建书」走 /ai-novel，页面里的界面经这里转到本机服务。
-// 必须写在前端静态兜底之前，否则会被 SPA 的 index.html 接走。
-app.use('*', async (c, next) => {
-  if (c.req.path !== AI_NOVEL_MOUNT && !c.req.path.startsWith(`${AI_NOVEL_MOUNT}/`)) {
-    await next()
-    return
-  }
-  return proxyAiNovelApp(c)
-})
 
 // Serve static files (storage)
 // 生成的图片/视频按 uuid 命名、内容不变，标记为 immutable 让浏览器长缓存
@@ -116,13 +101,7 @@ console.log(`🚀 幻书 TS server on http://localhost:${port}`)
 
 await resumeInterruptedTasks()
 
-const aiNovelRoot = path.join(projectRoot, 'ai-novel')
-void ensureAiNovelSidecar({ root: aiNovelRoot }).then((status) => {
-  if (status.running) console.log(`📚 AI 建书已就绪，顶栏进入 /ai-novel`)
-  else console.warn(`📚 AI 建书未启动：${status.message}`)
-})
-
-// 建书接口用 SSE 把多步生成一直推到结束，可能超过 Node 默认 5 分钟的 requestTimeout。
+// 织界续写用 SSE 把一章写完，可能超过 Node 默认 5 分钟的 requestTimeout。
 const httpServer = serve({ fetch: app.fetch, port })
 if ('requestTimeout' in httpServer && 'headersTimeout' in httpServer) {
   httpServer.requestTimeout = 0
