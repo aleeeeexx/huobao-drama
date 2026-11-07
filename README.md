@@ -128,9 +128,9 @@ Four built-in Mastra agents with database-backed configuration and Skill extensi
 | `storyboard_breaker` |剧本 → 分镜序列拆解<br>Script → storyboard sequence breakdown|
 | `prompt_generator` |角色/场景/道具图片提示词 + 分镜视频提示词生成<br>Image prompts for characters/scenes/props + storyboard video prompts|
 
-### 🎮 织界 / Playable RPG
+### 🎮 幻书 / Playable RPG
 
-织界是短剧制作台的玩家层，不是另一套创作栈。首页选世界，`/play/:id` 流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以「生成剧情图」和「生成影像」。右侧档案来自同一部短剧的角色、场景和道具。<br>
+幻书是短剧制作台的玩家层，不是另一套创作栈。首页选世界，`/play/:id` 流式读下一幕，**点选剧情走向或写下自由行动**都能继续。当前场面可以「生成剧情图」和「生成影像」。右侧档案来自同一部短剧的角色、场景和道具。<br>
 Play mode rides the short-drama studio instead of a second creative stack. The home page picks a world, `/play/:id` streams the next scene, and the player continues by **clicking a branch or typing an action**. The illustration and video buttons stay. The dossier reads the same drama’s characters, scenes, and props.
 
 一局背后是一部 drama、一集 episode。续写用 `script_rewriter`（流式正文 + `save_script`），资产用 `extractor`，插画用 `prompt_generator` 的场景最终提示词再交图片任务，影像用 `storyboard_breaker` 只追加本幕分镜，缺视频提示词时再跑 `prompt_generator`，然后交视频任务。风格是「真人电影」，视频风格词与制作台一样在提交前注入。三条分支是改写结果上的玩家层封装，工作室没有独立分支表。制作台仍在 `/studio`。<br>
@@ -147,9 +147,9 @@ cd frontend && npm install && npm run dev
 |---|---|---|
 | `CODECC_API_KEY` | 空 / empty | 有值时启动写入 codecc 文本、图片、视频配置。只放 `backend/.env`<br>When set, startup upserts codecc text, image, and video configs. `backend/.env` only |
 | `CODECC_BASE_URL` | `https://codecc.cc` | 根地址，程序自行加 `/v1`<br>Root URL; the server appends `/v1` |
-| `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
-| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
-| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
+| `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，幻书与制作台共用<br>Text agents, shared by play and studio|
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，幻书插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，幻书影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
 | `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 grsai 图片配置；视频模型有值时再写入视频配置。只放 `backend/.env`<br>When set, startup upserts the grsai image config, and the video config when a video model is set. `backend/.env` only |
 | `GRSAI_BASE_URL` | `https://grsaiapi.com` | 根地址。图片自行加 `/v1`；视频用 `/v1/api/generate` 与 `/v1/api/result`<br>Root URL. Images append `/v1`; video uses `/v1/api/generate` and `/v1/api/result` |
 | `GRSAI_IMAGE_MODEL` | `gpt-image-2.5` | 图片任务。优先级 120，高于 codecc，两边都启用时生图走 grsai<br>Image tasks. Priority 120, so image generation prefers grsai when codecc is also active |
@@ -201,12 +201,12 @@ No config files — everything is set via environment variables (all have defaul
 | `FRONTEND_DIST` | `frontend/dist` |前端静态产物目录<br>Frontend static build directory|
 | `FFMPEG_BIN` / `FFPROBE_BIN` |npm 内置二进制<br>bundled npm binaries|自定义 ffmpeg/ffprobe 可执行文件路径<br>Custom ffmpeg/ffprobe executable paths|
 | `PUBLIC_BASE_URL` | — |Seedance 引用本地参考资源时所需的公网地址（服务器部署用）<br>Public URL Seedance needs to reference local assets (server deployments)|
-| `CODECC_API_KEY` | 空 / empty |织界玩家模式。见上文「织界」<br>Playable RPG mode. See “织界” above|
+| `CODECC_API_KEY` | 空 / empty |幻书玩家模式。见上文「幻书」<br>Playable RPG mode. See “幻书” above|
 | `CODECC_BASE_URL` | `https://codecc.cc` |codecc 根地址<br>codecc root URL|
-| `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，织界与制作台共用<br>Text agents, shared by play and studio|
-| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，织界插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
-| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，织界影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
-| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 `grsai-image`；`GRSAI_VIDEO_MODEL` 有值时再写入 `grsai-video`。见上文「织界」<br>When set, startup upserts `grsai-image`, and `grsai-video` when `GRSAI_VIDEO_MODEL` is set. See “织界” above |
+| `CODECC_TEXT_MODEL` | `grok-4.7` |文本 Agent，幻书与制作台共用<br>Text agents, shared by play and studio|
+| `CODECC_IMAGE_MODEL` | `grok-imagine-image-quality` |图片任务，幻书插画与制作台生图共用<br>Image tasks, shared by play stills and the studio|
+| `CODECC_VIDEO_MODEL` | `grok-imagine-video-1.5` |视频任务，幻书影像与制作台生视频共用<br>Video tasks, shared by play clips and the studio|
+| `GRSAI_API_KEY` | 空 / empty | 有值时启动写入 `grsai-image`；`GRSAI_VIDEO_MODEL` 有值时再写入 `grsai-video`。见上文「幻书」<br>When set, startup upserts `grsai-image`, and `grsai-video` when `GRSAI_VIDEO_MODEL` is set. See “幻书” above |
 | `GRSAI_BASE_URL` | `https://grsaiapi.com` | grsai 根地址，不要自带 `/v1`<br>grsai root URL; do not include `/v1` |
 | `GRSAI_IMAGE_MODEL` | `gpt-image-2.5` | 图片任务。优先级 120，高于 codecc<br>Image tasks. Priority 120, above codecc |
 | `GRSAI_TEXT_MODEL` | 空 / empty | 有值才写入 `grsai-text`（优先级 90）<br>Writes `grsai-text` only when set (priority 90) |

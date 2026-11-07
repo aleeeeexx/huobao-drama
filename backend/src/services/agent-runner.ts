@@ -1,6 +1,6 @@
 /**
  * 工作室 Agent 的统一入口。
- * 制作台的提取、视频提示词，以及织界回合，都从这里调用 Mastra，
+ * 制作台的提取、视频提示词，以及幻书回合，都从这里调用 Mastra，
  * 不再各自直连 chat/completions。
  */
 import { buildAgentRequestContext } from '../agents/context.js'
@@ -14,7 +14,7 @@ export interface StudioAgentRun {
   maxSteps?: number
   model?: string
   configId?: number
-  /** 织界追加单条分镜时设置。保存工具会拒绝清空其他分镜。 */
+  /** 幻书追加单条分镜时设置。保存工具会拒绝清空其他分镜。 */
   storyboardShotNumber?: number
   onTextDelta?: (delta: string) => Promise<void> | void
   onStepFinish?: (step: any) => void

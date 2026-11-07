@@ -2,7 +2,7 @@
   <div class="page lobby">
     <header class="lobby-head">
       <p class="eyebrow">互动文字 RPG</p>
-      <h1>织界</h1>
+      <h1>幻书</h1>
       <p class="lede">
         选一个世界，或自己写下设定。故事一幕一幕往下长。每一幕都会给出剧情走向，你也可以不选，直接写下你要做的事。看中的场面可以画成插画，再拍成一段影像。
       </p>

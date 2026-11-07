@@ -13,7 +13,7 @@ export interface AgentRequestContextValues {
   /** AI 内容语言；缺省时读全局设置（app_settings.content_language） */
   language?: ContentLanguage
   /**
-   * 只追加这一个分镜号。织界生成本幕影像时设置。
+   * 只追加这一个分镜号。幻书生成本幕影像时设置。
    * 未设置时，分镜工具保持制作台「首批清空再写入」的行为。
    */
   storyboardShotNumber?: number
@@ -42,7 +42,7 @@ export function getDramaId(requestContext: RequestContext | undefined): number |
   return typeof v === 'number' ? v : null
 }
 
-/** 织界追加分镜时只允许写入这个分镜号；制作台不设置，返回 null */
+/** 幻书追加分镜时只允许写入这个分镜号；制作台不设置，返回 null */
 export function getStoryboardShotNumber(requestContext: RequestContext | undefined): number | null {
   const value = requestContext?.get('storyboardShotNumber' as never)
   return typeof value === 'number' && value > 0 ? value : null

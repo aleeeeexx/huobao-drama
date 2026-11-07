@@ -2,7 +2,7 @@
  * 资产提取任务 — 异步执行，按「集 × 类型」粒度跟踪
  * 角色 / 场景 / 道具 可分别单独提取，同一集的不同类型可并行
  * 任务状态为进程内内存态：后端重启后运行中的任务状态丢失（Agent 调用本身已被中断）
- * 织界回合也调用 runExtraction，与制作台共用 extractor Agent。
+ * 幻书回合也调用 runExtraction，与制作台共用 extractor Agent。
  */
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { runStudioAgent } from './agent-runner.js'
@@ -29,7 +29,7 @@ const EXTRACT_MESSAGES: Record<ExtractTarget, string> = {
 
 export interface ExtractionOptions { model?: string; configId?: number }
 
-/** 跑完一类资产的提取 Agent。制作台的异步任务和织界回合都走这里。 */
+/** 跑完一类资产的提取 Agent。制作台的异步任务和幻书回合都走这里。 */
 export async function runExtraction(
   episodeId: number,
   dramaId: number,

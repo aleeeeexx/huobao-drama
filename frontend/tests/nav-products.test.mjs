@@ -7,7 +7,9 @@ const nuxt = readFileSync(new URL('../nuxt.config.ts', import.meta.url), 'utf8')
 const index = readFileSync(new URL('../app/pages/index.vue', import.meta.url), 'utf8')
 const locales = ['zh', 'en', 'ja', 'ko'].map(code => readFileSync(new URL(`../app/locales/${code}.json`, import.meta.url), 'utf8'))
 
-test('top bar keeps 织界, studio, and settings without 小说 or AI 建书', () => {
+test('top bar keeps 幻书, studio, and settings without 小说 or AI 建书', () => {
+  assert.match(layout, /<span class="brand-name">幻书<\/span>/)
+  assert.match(locales[0], /"play":\s*"幻书"/)
   assert.match(layout, /to="\/"/)
   assert.match(layout, /layout\.nav\.play/)
   assert.match(layout, /to="\/studio"/)

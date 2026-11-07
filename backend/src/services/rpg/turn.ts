@@ -1,5 +1,5 @@
 /**
- * 织界回合的纯逻辑：玩家行动解析、叙事流拆分、从短剧资产投影档案。
+ * 幻书回合的纯逻辑：玩家行动解析、叙事流拆分、从短剧资产投影档案。
  * 不访问数据库，方便单测。续写、提取、分镜和提示词不在这里调用模型。
  */
 
@@ -8,7 +8,7 @@ import { PLAY_STILL_PROMPT_MARK, type ReferenceKind } from './references.js'
 export const RPG_STATE_SENTINEL = '<<<RPG_STATE>>>'
 const FREE_TEXT_MAX = 400
 /**
- * 默认每章字数。织界一幕给玩家看的正文按这一章写，不再压成几百字的短剧节拍。
+ * 默认每章字数。幻书一幕给玩家看的正文按这一章写，不再压成几百字的短剧节拍。
  */
 export const PLAY_NOVEL_CHAPTER_CHARS = 3000
 const PLAY_NOVEL_CHAPTER_MIN_CHARS = 1800
@@ -729,7 +729,7 @@ function referenceCaption(references: Array<{ kind: ReferenceKind; name: string 
 
 /**
  * 句号落在摘录前部时丢掉半句；找不到句号就整段保留。
- * 织界正文续写不用这里。它按私有 writing_context 只带上一章最后 6000 字，并用 truncated 标明是否截断。
+ * 幻书正文续写不用这里。它按私有 writing_context 只带上一章最后 6000 字，并用 truncated 标明是否截断。
  */
 export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EXCERPT_CHARS): string {
   const text = (recent || '').trim()
@@ -741,7 +741,7 @@ export function previousChapterExcerpt(recent: string, max = PREVIOUS_CHAPTER_EX
 }
 
 /**
- * 火宝小说不产出选项。这是织界外壳：章节正文已经写完，只要 3 条下一步。
+ * 火宝小说不产出选项。这是幻书外壳：章节正文已经写完，只要 3 条下一步。
  */
 export function buildPlayChoicesPrompt(chapterText: string): string {
   const excerpt = (chapterText || '').trim().slice(-800)

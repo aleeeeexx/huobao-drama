@@ -1,5 +1,5 @@
 /**
- * 织界场面插画与影像的视觉风格。
+ * 幻书场面插画与影像的视觉风格。
  * 短剧制作台继续用各自的 style_presets；玩法生图、生视频固定走这一条，不读取世界原来的漫剧风格。
  */
 export const LIVE_ACTION_CINEMATIC_STYLE = {

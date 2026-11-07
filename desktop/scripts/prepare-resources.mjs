@@ -3,7 +3,7 @@
  *
  * 1. frontend/           ← nuxt generate 产物（.output/public，含 index.html）
  * 2. workspace-template/ ← backend/workspace（skills + prompts，首启动拷入 userData）
- * 3. novel-prompts/      ← 织界续写提示词（桌面 bundle 不带源码目录）
+ * 3. novel-prompts/      ← 幻书续写提示词（桌面 bundle 不带源码目录）
  * 4. bin-<os>-<arch>/    ← ffmpeg/ffprobe 按平台与架构分目录（electron-builder 宏各取所需，
  *                          避免 mac 包带 exe、win 包带 mac 二进制白白 +144MB）
  */
@@ -35,10 +35,10 @@ const workspaceSrc = path.join(REPO, 'backend', 'workspace')
 fs.cpSync(workspaceSrc, path.join(RES, 'workspace-template'), { recursive: true })
 console.log('resources/workspace-template ✓')
 
-// 3. 织界续写提示词。桌面后端是单文件 bundle，读不到源码旁的 prompt-source。
+// 3. 幻书续写提示词。桌面后端是单文件 bundle，读不到源码旁的 prompt-source。
 const promptSrc = path.join(REPO, 'backend', 'src', 'services', 'novel', 'prompt-source')
 if (!fs.existsSync(path.join(promptSrc, 'defaults', 'create_novel_by_ai.json'))) {
-  console.error('缺少织界续写提示词 backend/src/services/novel/prompt-source/defaults')
+  console.error('缺少幻书续写提示词 backend/src/services/novel/prompt-source/defaults')
   process.exit(1)
 }
 fs.cpSync(promptSrc, path.join(RES, 'novel-prompts'), { recursive: true })

@@ -2,8 +2,8 @@
   <div class="play">
     <aside class="dossier">
       <button class="back" type="button" @click="navigateTo('/')">← 世界</button>
-      <p class="eyebrow">{{ session?.world?.genre || '织界' }}</p>
-      <h1>{{ session?.title || '织界' }}</h1>
+      <p class="eyebrow">{{ session?.world?.genre || '幻书' }}</p>
+      <h1>{{ session?.title || '幻书' }}</h1>
       <p v-if="session?.world?.tagline" class="tagline">{{ session.world.tagline }}</p>
 
       <section class="block">
@@ -236,7 +236,7 @@ let platePollsLeft = 0
 
 const PLATE_POLL_LIMIT = 60
 
-useHead(() => ({ title: session.value?.title ? `${session.value.title} · 织界` : '织界' }))
+useHead(() => ({ title: session.value?.title ? `${session.value.title} · 幻书` : '幻书' }))
 
 const hasTurns = computed(() => (session.value?.turns || []).length > 0)
 const showOpeningWait = computed(() => !acting.value && !hasTurns.value && !stageError.value && (loading.value || awaitingOpening.value))

@@ -1,12 +1,12 @@
-本目录的设定、章计划和正文提示词取自私有仓库 https://github.com/aleeeeexx/AI_NovelGenerator 的 main 快照，不是织界原创，也不是另行对照公开的 YILING0013 副本。
+本目录的设定、章计划和正文提示词取自私有仓库 https://github.com/aleeeeexx/AI_NovelGenerator 的 main 快照，不是幻书原创，也不是另行对照公开的 YILING0013 副本。
 
-该私有树携带上游 GNU AGPL v3.0，全文见同目录 LICENSE。织界写章以这份私有快照为对照权威。
+该私有树携带上游 GNU AGPL v3.0，全文见同目录 LICENSE。幻书写章以这份私有快照为对照权威。
 
 纳入范围：
 - defaults/create_novel_by_ai.json 及其 prompt / text_prompt / schema_prompt
 - defaults/plan_chapters_by_ai_story_prompt.md、plan_chapters_by_ai_output.md
 - defaults/write_chapter_by_ai_story_prompt.md
 
-织界 `/play` 的设定、本章计划和正文续写读取上述提示词。
+幻书 `/play` 的设定、本章计划和正文续写读取上述提示词。
 
 修改或通过网络提供这些提示词与任务图时，请遵守 AGPL v3.0，包括向用户提供对应源代码。

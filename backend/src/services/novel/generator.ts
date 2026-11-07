@@ -1,8 +1,8 @@
 /**
- * 织界文章生成与续写。
+ * 幻书文章生成与续写。
  * 设定、章计划和续写对照私有 aleeeeexx/AI_NovelGenerator 的 main 快照。
  * 每次只规划当前要写的章节，正文用 write_chapter_by_ai；续写带上已保存的上一章。
- * 模型调用由调用方注入，走织界已配置的文本模型。
+ * 模型调用由调用方注入，走幻书已配置的文本模型。
  */
 import {
   appendRenderedPlan,

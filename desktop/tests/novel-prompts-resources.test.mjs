@@ -8,7 +8,7 @@ const prepare = readFileSync(new URL('../scripts/prepare-resources.mjs', import.
 const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8')
 const backendIndex = readFileSync(new URL('../../backend/src/index.ts', import.meta.url), 'utf8')
 
-test('desktop ships 织界 chapter prompts and does not ship the ai-novel sidecar', () => {
+test('desktop ships 幻书 chapter prompts and does not ship the ai-novel sidecar', () => {
   assert.match(main, /NOVEL_PROMPT_DEFAULTS:/)
   assert.match(main, /novel-prompts', 'defaults'/)
   assert.match(main, /prompt-source\/defaults/)

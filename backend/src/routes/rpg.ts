@@ -1,5 +1,5 @@
 /**
- * 织界玩家接口。章节正文按设定、本章计划和续写写完后一次性返回；短剧剧本另由 script_rewriter 保存。插画和视频复用 sys_task。
+ * 幻书玩家接口。章节正文按设定、本章计划和续写写完后一次性返回；短剧剧本另由 script_rewriter 保存。插画和视频复用 sys_task。
  */
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'

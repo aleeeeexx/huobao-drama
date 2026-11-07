@@ -101,7 +101,7 @@ console.log(`🚀 幻书 TS server on http://localhost:${port}`)
 
 await resumeInterruptedTasks()
 
-// 织界续写用 SSE 把一章写完，可能超过 Node 默认 5 分钟的 requestTimeout。
+// 幻书续写用 SSE 把一章写完，可能超过 Node 默认 5 分钟的 requestTimeout。
 const httpServer = serve({ fetch: app.fetch, port })
 if ('requestTimeout' in httpServer && 'headersTimeout' in httpServer) {
   httpServer.requestTimeout = 0

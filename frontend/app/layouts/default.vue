@@ -10,7 +10,6 @@
           </div>
           <div class="brand-text">
             <span class="brand-name">幻书</span>
-            <span class="brand-sub">织界</span>
           </div>
         </button>
       </div>
@@ -145,7 +144,7 @@ watch(locale, checkAiConfigs)
   color: var(--text-0);
   line-height: 1;
 }
-.brand-text { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.brand-text { display: flex; align-items: center; line-height: 1.15; }
 .brand-name {
   font-size: 15px; font-weight: 700;
   /* ChatFire 签名：品牌字标火焰橙渐变 */
@@ -154,11 +153,6 @@ watch(locale, checkAiConfigs)
   background-clip: text;
   color: transparent;
   letter-spacing: -0.01em;
-}
-.brand-sub {
-  font-size: 10px; font-weight: 400;
-  color: var(--text-3); margin-top: 1px;
-  letter-spacing: 0.04em;
 }
 
 /* Nav — pill segmented group */

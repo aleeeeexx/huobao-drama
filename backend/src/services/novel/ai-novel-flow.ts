@@ -1,5 +1,5 @@
 /**
- * 织界文章生成与续写。
+ * 幻书文章生成与续写。
  * 对照权威是私有仓库 aleeeeexx/AI_NovelGenerator 的 main 快照，不是公开的 YILING0013 副本。
  * 设定按该快照的 create_novel_by_ai 连线执行。
  * 章计划和正文使用同一快照的 plan_chapters_by_ai / write_chapter_by_ai 提示词。
@@ -109,7 +109,7 @@ export function novelPromptDefaultsDir(): string {
   const fromEnv = process.env.NOVEL_PROMPT_DEFAULTS
   if (fromEnv && fs.existsSync(path.join(fromEnv, 'create_novel_by_ai.json'))) return path.resolve(fromEnv)
   if (fs.existsSync(path.join(SOURCE_DEFAULTS, 'create_novel_by_ai.json'))) return SOURCE_DEFAULTS
-  throw new Error('找不到织界小说流程文件')
+  throw new Error('找不到幻书小说流程文件')
 }
 
 function readDefaultsFile(name: string): string {
@@ -573,7 +573,7 @@ function writingBundle(project: NovelProject, chapterNumber: number, guidance: s
       adopted: ['已保存设定', '压缩故事', previousWritten ? '上一章正文' : '无前章正文'],
       missing_required: [],
       count: 1,
-      note: '织界把已保存的设定和正文直接交给这一章，不调用书库读取工具。',
+      note: '幻书把已保存的设定和正文直接交给这一章，不调用书库读取工具。',
     },
   }
 }

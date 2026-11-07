@@ -294,7 +294,7 @@ export const appSettings = sqliteTable('app_settings', {
   updatedAt: text('updated_at').notNull(),
 })
 
-/** 织界预设/玩家自定义世界 */
+/** 幻书预设/玩家自定义世界 */
 export const rpgWorlds = sqliteTable('rpg_worlds', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   slug: text('slug').notNull(),
@@ -317,9 +317,9 @@ export const rpgSessions = sqliteTable('rpg_sessions', {
   title: text('title').notNull(),
   status: text('status').notNull().default('active'),
   worldState: text('world_state').notNull(),
-  /** 织界续写用的设定、章计划、章节正文、前文摘要、本章终点 */
+  /** 幻书续写用的设定、章计划、章节正文、前文摘要、本章终点 */
   novelState: text('novel_state'),
-  /** rpg：织界。novel：已下线的独立小说页留下的行，织界不打开。 */
+  /** rpg：幻书。novel：已下线的独立小说页留下的行，幻书不打开。 */
   playKind: text('play_kind').notNull().default('rpg'),
   turnCount: integer('turn_count').default(0),
   createdAt: text('created_at').notNull(),

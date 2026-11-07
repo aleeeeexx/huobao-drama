@@ -418,7 +418,7 @@ const LEGACY_SEED_PROMPTS: Record<string, string> = {
 /**
  * 已下架的种子预设 — 内容寻址删除：仅当库中行的 prompt 仍是种子原文
  * （未被用户编辑过）才删除；用户改过的同名行视为用户数据保留。
- * live（旧 key）：只删除仍等于旧种子原文的行。织界使用另一条预设 live-action（真人电影）。
+ * live（旧 key）：只删除仍等于旧种子原文的行。幻书使用另一条预设 live-action（真人电影）。
  */
 const REMOVED_SEED_PROMPTS: Record<string, string> = {
   live: 'ultra-realistic cinematic live-action look, professional film photography, natural skin tones with detailed pores and realistic texture, true human anatomy and proportions, shallow depth of field with creamy bokeh, cinematic three-point lighting, subtle film grain, 35mm lens cinematic framing, true-to-life color grading, detailed real-world environments, consistent actor appearance across shots, avoid cartoon or anime features, avoid 3D render look, avoid illustration style, avoid plastic waxy skin, avoid over-smoothing beauty filter',

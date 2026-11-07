@@ -1,6 +1,6 @@
 /**
  * 旧版大纲与草稿提示词，生成路径已不再调用。
- * 织界章计划和正文见 ai-novel-flow.ts。
+ * 幻书章计划和正文见 ai-novel-flow.ts。
  */
 export interface NovelPromptParams {
   [key: string]: string | number | undefined

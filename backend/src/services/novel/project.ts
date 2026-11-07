@@ -1,8 +1,8 @@
-/** 织界小说项目。设定、章计划和正文都写在这一份状态里。 */
+/** 幻书小说项目。设定、章计划和正文都写在这一份状态里。 */
 
 export const NOVEL_DEFAULT_CHAPTER_COUNT = 100
 export const NOVEL_DEFAULT_WORD_NUMBER = 3000
-/** 织界章节请求的输出上限。 */
+/** 幻书章节请求的输出上限。 */
 export const NOVEL_MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 16384)
 
 export interface NovelChapterInfo {

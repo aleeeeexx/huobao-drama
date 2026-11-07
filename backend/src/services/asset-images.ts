@@ -1,6 +1,6 @@
 /**
  * 角色定妆、场景空镜、道具白底图。
- * 制作台按钮和织界补缺走同一条：最终提示词 → generateImage，已有 imageUrl 的不重画。
+ * 制作台按钮和幻书补缺走同一条：最终提示词 → generateImage，已有 imageUrl 的不重画。
  */
 import { and, desc, eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
