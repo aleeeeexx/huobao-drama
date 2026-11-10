@@ -13,6 +13,7 @@ import {
   listSessions,
   listWorlds,
   narrateSession,
+  updateSessionPlayerCharacter,
 } from '../services/rpg/engine.js'
 
 const app = new Hono()
@@ -39,6 +40,15 @@ app.get('/sessions/:id', async (c) => {
   const session = await getSession(Number(c.req.param('id')))
   if (!session) return notFound(c, '这局游戏不存在')
   return success(c, session)
+})
+
+app.put('/sessions/:id/player-character', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return success(c, await updateSessionPlayerCharacter(Number(c.req.param('id')), body))
+  } catch (error) {
+    return badRequest(c, error instanceof Error ? error.message : '角色资料保存失败')
+  }
 })
 
 app.post('/sessions/:id/act', async (c) => {

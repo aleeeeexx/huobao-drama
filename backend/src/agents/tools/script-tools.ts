@@ -19,7 +19,8 @@ const readEpisodeScript = createTool({
     const [ep] = await db.select().from(schema.episodes)
       .where(eq(schema.episodes.id, episodeId))
     if (!ep) return { error: `Episode not found (id=${episodeId})` }
-    const content = ep.content || ep.scriptContent
+    const rewrite = context?.requestContext?.get('screenplayRewrite' as never) as { source: string; saved?: string } | undefined
+    const content = rewrite ? rewrite.source : ep.content || ep.scriptContent
     if (!content) return { error: `Episode has no content (id=${episodeId})` }
     return { content, word_count: content.length, episode_id: episodeId }
   },
@@ -37,7 +38,8 @@ const rewriteToScreenplay = createTool({
     const [ep] = await db.select().from(schema.episodes)
       .where(eq(schema.episodes.id, episodeId))
     if (!ep) return { error: `Episode not found` }
-    const source = ep.content || ep.scriptContent
+    const rewrite = context?.requestContext?.get('screenplayRewrite' as never) as { source: string; saved?: string } | undefined
+    const source = rewrite ? rewrite.source : ep.content || ep.scriptContent
     if (!source) return { error: `Episode has no content to rewrite` }
 
     return {
@@ -67,6 +69,11 @@ const saveScript = createTool({
   execute: async ({ content }, context) => {
     const episodeId = getEpisodeId(context?.requestContext)
     if (!episodeId) return { error: 'Missing episodeId in request context' }
+    const rewrite = context?.requestContext?.get('screenplayRewrite' as never) as { source: string; saved?: string } | undefined
+    if (rewrite) {
+      rewrite.saved = content
+      return { message: 'Script saved', word_count: content.length }
+    }
     await db.update(schema.episodes)
       .set({ scriptContent: content, updatedAt: now() })
       .where(eq(schema.episodes.id, episodeId))

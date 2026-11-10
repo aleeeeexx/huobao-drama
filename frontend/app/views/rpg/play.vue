@@ -6,6 +6,35 @@
       <h1>{{ session?.title || '幻书' }}</h1>
       <p v-if="session?.world?.tagline" class="tagline">{{ session.world.tagline }}</p>
 
+      <section v-if="session?.player_character" class="block player-character-block">
+        <div class="block-heading">
+          <h2>本局主角</h2>
+          <button class="text-action" type="button" :disabled="acting" @click="openCharacterEditor">编辑</button>
+        </div>
+        <div class="player-character-summary">
+          <img v-if="session.player_character.image_url" :src="session.player_character.image_url" :alt="''" />
+          <div>
+            <strong>{{ session.player_character.name }}</strong>
+            <span>{{ session.player_character.role }}</span>
+          </div>
+        </div>
+        <p v-if="session.player_character.personality" class="character-note"><b>性格</b>{{ session.player_character.personality }}</p>
+        <p v-if="session.player_character.background" class="character-note"><b>经历</b>{{ session.player_character.background }}</p>
+        <p v-if="session.player_character.styling" class="character-note"><b>服装</b>{{ session.player_character.styling }}</p>
+      </section>
+      <section v-else class="block player-character-block">
+        <h2>本局主角</h2>
+        <p class="dim">还没有主角。可以按世界设定生成一位，也可以从全局角色库中选择。</p>
+        <div class="missing-player-actions">
+          <button class="btn btn-primary" type="button" :disabled="acting || generatingPlayerCharacter" @click="generateWorldPlayerCharacter">
+            <Loader2 v-if="generatingPlayerCharacter" :size="13" class="spin" />
+            {{ generatingPlayerCharacter ? '生成中' : '生成默认主角' }}
+          </button>
+          <button class="text-action" type="button" :disabled="acting || generatingPlayerCharacter" @click="openCharacterPicker">选择已有角色</button>
+        </div>
+        <NuxtLink class="studio-link character-library-link" to="/characters">创建或编辑全局角色</NuxtLink>
+      </section>
+
       <section class="block">
         <h2>此刻</h2>
         <p class="scene-name">{{ state.scene.location || '尚未开场' }}</p>
@@ -26,7 +55,7 @@
       <section class="block">
         <h2>人物</h2>
         <ul v-if="people.length">
-          <li v-for="person in people" :key="person.name" :class="{ 'with-plate': person.image_url }">
+          <li v-for="person in people" :key="person.character_id || person.name" class="character-row">
             <button
               v-if="person.image_url"
               type="button"
@@ -37,14 +66,22 @@
             >
               <img :src="person.image_url" :alt="person.name" />
             </button>
+            <span v-else class="character-avatar"><UserRound :size="16" /></span>
             <div class="who-copy">
               <strong>{{ person.name }}</strong>
               <span>{{ person.role }}</span>
               <em>{{ person.status }}</em>
             </div>
+            <button
+              v-if="person.character_id"
+              type="button"
+              class="text-action character-edit-action"
+              :disabled="savingStoryCharacter"
+              @click="openStoryCharacterEditor(person.character_id)"
+            >编辑</button>
           </li>
         </ul>
-        <p v-else class="dim">还没有人走进这一幕。</p>
+        <p v-else class="dim">{{ session?.asset_sync_pending ? '正在提取本集人物…' : '本集还没有提取到人物。' }}</p>
       </section>
 
       <section class="block">
@@ -122,10 +159,10 @@
         <p class="narrative">{{ turn.narrative }}</p>
         <div class="turn-media">
           <div class="media-actions">
-            <button class="btn" type="button" :disabled="imageBusy(turn)" @click="illustrate(turn)">
+            <button class="btn" type="button" :disabled="imageBusy(turn) || session?.asset_sync_pending" @click="illustrate(turn)">
               {{ imageLabel(turn) }}
             </button>
-            <button class="btn" type="button" :disabled="videoBusy(turn)" @click="film(turn)">
+            <button class="btn" type="button" :disabled="videoBusy(turn) || session?.asset_sync_pending" @click="film(turn)">
               {{ videoLabel(turn) }}
             </button>
           </div>
@@ -203,13 +240,110 @@
         <img class="still-viewer-img" :src="viewer.src" :alt="viewer.alt" />
       </div>
     </Teleport>
+
+    <Teleport to="body">
+      <div v-if="characterEditorOpen" class="overlay character-editor-overlay" role="dialog" aria-modal="true" aria-labelledby="character-editor-title" @click.self="characterEditorOpen = false">
+        <section class="dialog character-editor-dialog">
+          <header class="dialog-head">
+            <div>
+              <span class="eyebrow">{{ session?.player_character?.name }}</span>
+              <h2 id="character-editor-title">编辑本局主角</h2>
+            </div>
+            <button class="btn btn-ghost btn-icon" type="button" aria-label="关闭" @click="characterEditorOpen = false">×</button>
+          </header>
+          <div class="dialog-body character-editor-fields">
+            <label class="field"><span>本世界性格</span><textarea v-model="playerCharacterDraft.personality" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界背景经历</span><textarea v-model="playerCharacterDraft.background" class="textarea" rows="4" maxlength="4000" /></label>
+            <label class="field"><span>本世界服装与妆造</span><textarea v-model="playerCharacterDraft.styling" class="textarea" rows="3" maxlength="4000" /></label>
+          </div>
+          <footer class="dialog-foot">
+            <span class="dim">修改会用于后续章节，并重新生成角色定妆图。</span>
+            <button class="btn btn-primary" type="button" :disabled="savingPlayerCharacter" @click="savePlayerCharacter">
+              <Loader2 v-if="savingPlayerCharacter" :size="13" class="spin" />
+              {{ savingPlayerCharacter ? '保存中' : '保存本局设定' }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="storyCharacterEditorOpen && editingStoryCharacter" class="overlay character-editor-overlay" role="dialog" aria-modal="true" aria-labelledby="story-character-editor-title" @click.self="!savingStoryCharacter && (storyCharacterEditorOpen = false)">
+        <section class="dialog character-editor-dialog">
+          <header class="dialog-head">
+            <div>
+              <span class="eyebrow">剧情人物</span>
+              <h2 id="story-character-editor-title">{{ editingStoryCharacter.name }}</h2>
+            </div>
+            <button class="btn btn-ghost btn-icon" type="button" aria-label="关闭" :disabled="savingStoryCharacter" @click="storyCharacterEditorOpen = false"><X :size="15" /></button>
+          </header>
+          <div class="dialog-body character-editor-fields">
+            <label class="field"><span>身份</span><input v-model="storyCharacterDraft.role" class="input" maxlength="120" /></label>
+            <label class="field"><span>固定外貌</span><textarea v-model="storyCharacterDraft.appearance" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>身材与体态</span><textarea v-model="storyCharacterDraft.physique" class="textarea" rows="2" maxlength="4000" /></label>
+            <label class="field"><span>本世界性格</span><textarea v-model="storyCharacterDraft.personality" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界背景经历</span><textarea v-model="storyCharacterDraft.background" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界服装与妆造</span><textarea v-model="storyCharacterDraft.styling" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>补充描述</span><textarea v-model="storyCharacterDraft.description" class="textarea" rows="2" maxlength="4000" /></label>
+          </div>
+          <footer class="dialog-foot">
+            <div class="story-character-global-action">
+              <button v-if="!editingStoryCharacter.global_character_id" class="btn" type="button" :disabled="savingStoryCharacter" @click="saveStoryCharacterToGlobal">
+                <Loader2 v-if="savingStoryCharacter" :size="13" class="spin" />
+                保存为全局角色
+              </button>
+              <span v-else class="story-character-saved">已保存到全局角色</span>
+            </div>
+            <button class="btn btn-primary" type="button" :disabled="savingStoryCharacter" @click="saveStoryCharacter">
+              <Loader2 v-if="savingStoryCharacter" :size="13" class="spin" />
+              {{ savingStoryCharacter ? '保存中' : '保存修改' }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="characterPickerOpen" class="overlay character-editor-overlay" role="dialog" aria-modal="true" aria-labelledby="character-picker-title" @click.self="characterPickerOpen = false">
+        <section class="dialog character-editor-dialog">
+          <header class="dialog-head">
+            <div>
+              <span class="eyebrow">本局主角</span>
+              <h2 id="character-picker-title">选择全局角色</h2>
+            </div>
+            <button class="btn btn-ghost btn-icon" type="button" aria-label="关闭" @click="characterPickerOpen = false">×</button>
+          </header>
+          <div v-if="globalCharacters.length" class="global-character-options">
+            <button
+              v-for="character in globalCharacters"
+              :key="character.id"
+              class="global-character-option"
+              type="button"
+              :disabled="selectingCharacter"
+              @click="selectGlobalCharacter(character)"
+            >
+              <img v-if="character.image_url" :src="publicMediaUrl(character.image_url)" :alt="''" />
+              <span v-else class="global-character-avatar"><UserRound :size="17" /></span>
+              <span><strong>{{ character.name }}</strong><small>{{ character.role || '全局角色' }}</small></span>
+              <Loader2 v-if="selectingCharacterId === character.id" :size="14" class="spin" />
+            </button>
+          </div>
+          <div v-else class="empty-character-picker">
+            <p class="dim">角色库还是空的。</p>
+            <NuxtLink class="btn btn-primary" to="/characters" @click="characterPickerOpen = false">创建或生成角色</NuxtLink>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Loader2, UserRound, X } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
-import { rpgAPI } from '~/composables/useApi'
+import { characterAPI, rpgAPI } from '~/composables/useApi'
+import { publicMediaUrl } from '~/composables/useMedia'
 import { mapError, toastError } from '~/composables/useToast'
 import { shareOpening } from '~/utils/rpg-opening'
 
@@ -229,6 +363,18 @@ let stickToBottom = true
 let logResizeObserver: ResizeObserver | null = null
 let playDisposed = false
 const viewer = ref<{ src: string; alt: string; key: string } | null>(null)
+const characterEditorOpen = ref(false)
+const characterPickerOpen = ref(false)
+const storyCharacterEditorOpen = ref(false)
+const savingPlayerCharacter = ref(false)
+const generatingPlayerCharacter = ref(false)
+const savingStoryCharacter = ref(false)
+const selectingCharacter = ref(false)
+const selectingCharacterId = ref<number | null>(null)
+const playerCharacterDraft = ref({ personality: '', background: '', styling: '' })
+const editingStoryCharacter = ref<any>(null)
+const storyCharacterDraft = ref({ role: '', description: '', appearance: '', physique: '', personality: '', background: '', styling: '' })
+const globalCharacters = ref<any[]>([])
 const viewerOpener = ref<HTMLButtonElement | null>(null)
 const stillCloseButton = ref<HTMLButtonElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -266,10 +412,30 @@ const currentScenePlate = computed(() => {
   if (!location) return null
   return scenes.find((scene: { location?: string; image_url?: string | null }) => sameListedName(scene.location, location) && scene.image_url) || null
 })
-const people = computed(() => (state.value.characters || []).map((person: { name: string; role: string; status: string }) => {
-  const plate = plateByName(playAssets.value.characters, person.name)
-  return { ...person, plate_id: plate?.id ?? null, image_url: plate?.image_url || '' }
-}))
+const people = computed(() => {
+  const plates = playAssets.value.characters || []
+  const listed = (state.value.characters || []).map((person: { name: string; role: string; status: string }) => {
+    const plate = plateByName(plates, person.name)
+    return {
+      ...person,
+      role: plate?.role || person.role,
+      character_id: plate?.id ?? null,
+      plate_id: plate?.id ?? null,
+      image_url: plate?.image_url || '',
+    }
+  })
+  const extracted = plates
+    .filter((plate: { name?: string }) => plate.name && !listed.some((person: { name: string }) => sameListedName(plate.name!, person.name)))
+    .map((plate: { id: number; name: string; role?: string; image_url?: string | null }) => ({
+      name: plate.name,
+      role: plate.role || '剧情人物',
+      status: '本集角色',
+      character_id: plate.id,
+      plate_id: plate.id,
+      image_url: plate.image_url || '',
+    }))
+  return [...listed, ...extracted]
+})
 const belongings = computed(() => (state.value.items || []).map((item: { name: string; holder: string; description: string }) => {
   const plate = plateByName(playAssets.value.props, item.name)
   return { ...item, plate_id: plate?.id ?? null, image_url: plate?.image_url || '' }
@@ -297,9 +463,9 @@ function sameListedName(plateName: string | undefined, listedName: string) {
   return plateName.slice(0, LISTED_NAME_LIMIT) === listedName
 }
 
-function plateByName(rows: Array<{ id: number; name?: string; image_url?: string | null }> | undefined, name: string) {
+function plateByName(rows: Array<{ id: number; name?: string; role?: string; image_url?: string | null }> | undefined, name: string) {
   if (!name) return null
-  return (rows || []).find(row => sameListedName(row.name, name) && row.image_url) || null
+  return (rows || []).find(row => sameListedName(row.name, name)) || null
 }
 
 function busyKey(turnId: number, kind: 'image' | 'video') {
@@ -346,6 +512,137 @@ async function load() {
   session.value = await rpgAPI.session(sessionId.value)
 }
 
+function openCharacterEditor() {
+  const character = session.value?.player_character
+  if (!character) return
+  playerCharacterDraft.value = {
+    personality: character.personality || '',
+    background: character.background || '',
+    styling: character.styling || '',
+  }
+  characterEditorOpen.value = true
+}
+
+async function openCharacterPicker() {
+  try {
+    globalCharacters.value = await rpgAPI.globalCharacters() || []
+    characterPickerOpen.value = true
+  } catch (error) {
+    toastError(error, { fallback: '角色库载入失败' })
+  }
+}
+
+async function selectGlobalCharacter(character: { id: number }) {
+  if (selectingCharacter.value) return
+  selectingCharacter.value = true
+  selectingCharacterId.value = character.id
+  try {
+    session.value = await rpgAPI.updatePlayerCharacter(sessionId.value, { global_character_id: character.id })
+    characterPickerOpen.value = false
+    armPlatePoll()
+    if (shouldPoll()) startPoll()
+    toast.success('本局主角已加入，下一幕会按当前世界适配')
+  } catch (error) {
+    toastError(error, { fallback: '主角没有加入本局' })
+  } finally {
+    selectingCharacter.value = false
+    selectingCharacterId.value = null
+  }
+}
+
+async function generateWorldPlayerCharacter() {
+  if (generatingPlayerCharacter.value) return
+  generatingPlayerCharacter.value = true
+  try {
+    session.value = await rpgAPI.updatePlayerCharacter(sessionId.value, { generate_default: true })
+    armPlatePoll()
+    if (shouldPoll()) startPoll()
+    toast.success('本局主角已生成')
+  } catch (error) {
+    toastError(error, { fallback: '主角生成失败' })
+  } finally {
+    generatingPlayerCharacter.value = false
+  }
+}
+
+async function savePlayerCharacter() {
+  if (savingPlayerCharacter.value) return
+  savingPlayerCharacter.value = true
+  try {
+    session.value = await rpgAPI.updatePlayerCharacter(sessionId.value, playerCharacterDraft.value)
+    characterEditorOpen.value = false
+    armPlatePoll()
+    if (shouldPoll()) startPoll()
+    toast.success('本局主角设定已保存')
+  } catch (error) {
+    toastError(error, { fallback: '角色资料保存失败' })
+  } finally {
+    savingPlayerCharacter.value = false
+  }
+}
+
+function openStoryCharacterEditor(characterId: number) {
+  const character = (playAssets.value.characters || []).find((item: { id: number }) => item.id === characterId)
+  if (!character) return
+  editingStoryCharacter.value = character
+  storyCharacterDraft.value = {
+    role: character.role || '',
+    description: character.description || '',
+    appearance: character.appearance || '',
+    physique: character.physique || '',
+    personality: character.personality || '',
+    background: character.background || '',
+    styling: character.styling || '',
+  }
+  storyCharacterEditorOpen.value = true
+}
+
+async function updateStoryCharacter() {
+  const character = editingStoryCharacter.value
+  if (!character?.id) return false
+  await characterAPI.update(character.id, storyCharacterDraft.value)
+  await load()
+  armPlatePoll()
+  if (shouldPoll()) startPoll()
+  return true
+}
+
+async function saveStoryCharacter() {
+  if (savingStoryCharacter.value) return
+  savingStoryCharacter.value = true
+  try {
+    await updateStoryCharacter()
+    storyCharacterEditorOpen.value = false
+    toast.success('剧情人物已保存')
+  } catch (error) {
+    toastError(error, { fallback: '角色资料保存失败' })
+  } finally {
+    savingStoryCharacter.value = false
+  }
+}
+
+async function saveStoryCharacterToGlobal() {
+  const character = editingStoryCharacter.value
+  if (!character?.id || savingStoryCharacter.value) return
+  const previousImage = character.image_url
+  const changed = Object.entries(storyCharacterDraft.value).some(([key, value]) => value !== (character[key] || ''))
+  savingStoryCharacter.value = true
+  try {
+    await updateStoryCharacter()
+    const saved = await characterAPI.saveGlobal(character.id)
+    character.global_character_id = saved.id
+    const current = (playAssets.value.characters || []).find((item: { id: number }) => item.id === character.id)
+    if (current) current.global_character_id = saved.id
+    toast.success(changed && previousImage && saved.image_url === previousImage
+      ? '已保存到全局角色，头像沿用修改前的图片'
+      : '已保存到全局角色')
+  } catch (error) {
+    toastError(error, { fallback: '保存全局角色失败' })
+  } finally {
+    savingStoryCharacter.value = false
+  }
+}
+
 function needsMediaPoll() {
   return (session.value?.turns || []).some((turn: { image_status?: string | null; video_status?: string | null }) => (
     turn.image_status === 'processing' || turn.video_status === 'processing'
@@ -363,7 +660,7 @@ function armPlatePoll() {
 }
 
 function shouldPoll() {
-  return needsMediaPoll() || (platePollsLeft > 0 && platesPending())
+  return needsMediaPoll() || !!session.value?.asset_sync_pending || (platePollsLeft > 0 && platesPending())
 }
 
 function startPoll() {
@@ -372,6 +669,7 @@ function startPoll() {
   pollTimer = setInterval(async () => {
     try {
       await load()
+      if (!session.value?.asset_sync_pending && platesPending() && platePollsLeft === 0) armPlatePoll()
       if (platePollsLeft > 0) platePollsLeft -= 1
       if (!shouldPoll()) stopPoll()
     } catch { /* 下一轮再问 */ }
@@ -678,6 +976,44 @@ onBeforeUnmount(() => {
   color: var(--text-3);
   margin-bottom: 6px;
 }
+.block-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.text-action { padding: 2px 5px; border: 0; background: transparent; color: var(--accent-text); font-size: 12px; cursor: pointer; }
+.text-action:disabled { opacity: .5; cursor: default; }
+.player-character-summary { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.player-character-summary img { width: 42px; height: 42px; object-fit: cover; border-radius: 4px; background: var(--bg-2); }
+.player-character-summary > div { display: flex; flex-direction: column; gap: 3px; }
+.player-character-summary strong { font-size: 14px; }
+.player-character-summary span { color: var(--text-2); font-size: 12px; }
+.character-note { margin-top: 6px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.character-note b { margin-right: 6px; color: var(--text-3); font-weight: 600; }
+.character-editor-dialog { width: min(600px, calc(100vw - 32px)); max-height: min(86vh, 760px); overflow: auto; }
+.character-editor-fields { display: grid; gap: 14px; }
+.character-editor-fields .field { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.character-editor-fields textarea { width: 100%; resize: vertical; color: var(--text-0); font: inherit; font-weight: 400; font-size: 13px; }
+.character-editor-dialog .dialog-foot { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.character-editor-dialog .dialog-foot .dim { font-size: 11px; }
+.character-editor-dialog .dialog-foot .btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.story-character-global-action { min-width: 0; }
+.story-character-saved { color: var(--success); font-size: 12px; }
+.character-row { display: flex; flex-direction: row !important; align-items: center; gap: 9px; min-width: 0; }
+.character-avatar { width: 44px; height: 58px; flex: 0 0 44px; display: grid; place-items: center; color: var(--text-3); background: var(--bg-2); border-radius: 8px; }
+.character-row .who-copy { flex: 1; }
+.character-edit-action { flex: none; }
+.character-library-link { display: inline-block; margin-top: 6px; color: var(--accent-text); }
+.global-character-options { display: grid; gap: 7px; padding-top: 14px; }
+.global-character-option { min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 7px; color: var(--text-0); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px; text-align: left; cursor: pointer; }
+.global-character-option:hover { border-color: var(--accent); }
+.global-character-option:disabled { opacity: .65; cursor: wait; }
+.global-character-option img, .global-character-avatar { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 4px; object-fit: cover; background: var(--bg-2); }
+.global-character-avatar { display: grid; place-items: center; color: var(--text-3); }
+.global-character-option > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.global-character-option strong, .global-character-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.global-character-option strong { font-size: 13px; }
+.global-character-option small { color: var(--text-2); font-size: 11px; }
+.empty-character-picker { display: grid; justify-items: start; gap: 12px; padding-top: 16px; }
+.missing-player-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .scene-name { font-size: 22px; }
 .block ul { list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .block li { display: flex; flex-direction: column; gap: 1px; }

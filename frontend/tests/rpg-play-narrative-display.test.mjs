@@ -45,7 +45,8 @@ test('落库回合和生成状态在同一次赋值里切换，中间不再清�
   assert.equal(handoffs.length, 2)
   for (const handoff of handoffs) assert.doesNotMatch(handoff[1], /await/)
 
-  const success = script.slice(script.indexOf('if (failure) throw new Error(failure)'), script.indexOf('} catch (error)'))
+  const successStart = script.indexOf('if (failure) throw new Error(failure)')
+  const success = script.slice(successStart, script.indexOf('} catch (error)', successStart))
   assert.match(success, /showPersistedSession\(nextSession\)/)
   assert.doesNotMatch(success, /draft\.value\s*=\s*''/)
   const revealedAt = success.indexOf('showPersistedSession(nextSession)')

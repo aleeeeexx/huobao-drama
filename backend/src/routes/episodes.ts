@@ -6,6 +6,7 @@ import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
 import { getActiveConfigId } from '../services/ai.js'
 import { EXTRACT_TARGETS, getExtractionStatus, startExtraction, type ExtractTarget } from '../services/extraction.js'
 import { getVideoPromptBatchStatus, startVideoPromptBatch } from '../services/video-prompts.js'
+import { isEpisodeAssetImagesPending } from '../services/asset-images.js'
 
 const app = new Hono()
 
@@ -235,6 +236,8 @@ app.get('/:id/generation-tasks', async (c) => {
   const dramaProps = await db.select().from(schema.props).where(eq(schema.props.dramaId, ep.dramaId))
   const propIds = new Set(dramaProps.map(p => p.id))
 
+  // 先读取准备状态，再读取任务，避免准备完成时漏掉刚提交的任务。
+  const assetImagesPending = isEpisodeAssetImagesPending(episodeId)
   const allTasks = await db.select().from(schema.sysTask).where(eq(schema.sysTask.dramaId, ep.dramaId))
   const tasks = allTasks
     .filter(t =>
@@ -253,6 +256,7 @@ app.get('/:id/generation-tasks', async (c) => {
   return success(c, {
     tasks: toSnakeCaseArray(tasks),
     merges: toSnakeCaseArray(merges),
+    asset_images_pending: assetImagesPending,
   })
 })
 

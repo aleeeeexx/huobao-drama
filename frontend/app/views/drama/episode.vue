@@ -1010,7 +1010,7 @@
               <div class="video-task-meta">{{ t('episode.tasks.meta', { n: genTaskRows.length }) }}</div>
             </div>
             <div class="task-drawer-head-actions">
-              <button class="btn btn-sm" @click="loadGenTasks">
+              <button class="btn btn-sm" @click="refresh">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                 {{ t('common.refresh') }}
               </button>
@@ -1189,6 +1189,24 @@
                       :placeholder="t('episode.asset.stylingFieldPlaceholder')"
                     />
                   </label>
+                  <label v-if="assetDetail.type === 'character'" class="asset-detail-edit-field">
+                    <span>{{ t('episode.asset.physiqueField') }}</span>
+                    <textarea
+                      v-model="assetDetailDraft.physique"
+                      class="textarea asset-detail-textarea"
+                      rows="3"
+                      :placeholder="t('episode.asset.physiqueFieldPlaceholder')"
+                    />
+                  </label>
+                  <label v-if="assetDetail.type === 'character'" class="asset-detail-edit-field">
+                    <span>{{ t('episode.asset.personalityField') }}</span>
+                    <textarea
+                      v-model="assetDetailDraft.personality"
+                      class="textarea asset-detail-textarea"
+                      rows="3"
+                      :placeholder="t('episode.asset.personalityFieldPlaceholder')"
+                    />
+                  </label>
                   <label v-if="assetDetail.type === 'scene'" class="asset-detail-edit-field">
                     <span>{{ t('episode.asset.sceneDescField') }}</span>
                     <textarea
@@ -1261,6 +1279,13 @@
           <footer class="dialog-foot asset-detail-foot">
             <div class="asset-detail-secondary-actions">
               <button class="btn btn-danger" @click="askDeleteAsset(assetDetail.type, assetDetail.item)">{{ t('common.delete') }}</button>
+              <button
+                v-if="assetDetail.type === 'character' && !assetDetail.item.global_character_id"
+                class="btn"
+                :disabled="savingAssetDetail"
+                @click="saveCharacterToGlobal"
+              >{{ t('episode.asset.saveGlobal') }}</button>
+              <span v-else-if="assetDetail.type === 'character'" class="asset-detail-state is-ready">{{ t('episode.asset.globalSaved') }}</span>
               <button class="btn" @click="closeAssetDetail">{{ t('common.close') }}</button>
             </div>
             <div class="asset-detail-primary-actions">
@@ -1620,12 +1645,13 @@ const failedVideoMessages = ref({})
 // 任务列表面板：顶栏按钮触发的右侧抽屉,按集聚合 sys_task + video_merges
 const genTasks = ref([])
 const genMerges = ref([])
+const assetImagesPending = ref(false)
 const taskDrawer = ref(false)
 let genTasksTimer = null
 
 function openTaskDrawer() {
   taskDrawer.value = true
-  loadGenTasks()
+  void refresh()
 }
 function closeTaskDrawer() {
   taskDrawer.value = false
@@ -1651,7 +1677,7 @@ async function toggleExportDone() {
   }
 }
 const assetDetail = ref({ open: false, type: '', item: null })
-const assetDetailDraft = ref({ appearance: '', styling: '', prompt: '', lighting: '', description: '' })
+const assetDetailDraft = ref({ appearance: '', physique: '', personality: '', styling: '', prompt: '', lighting: '', description: '' })
 // 最终提示词手动编辑：dirty 时才随保存提交，避免无修改保存误清空 Agent 生成的提示词
 const assetPromptDraft = ref('')
 const assetPromptDirty = ref(false)
@@ -1675,6 +1701,8 @@ function openAssetDetail(type, item) {
   assetDetail.value = { open: true, type, item }
   assetDetailDraft.value = {
     appearance: item.appearance || '',
+    physique: item.physique || '',
+    personality: item.personality || '',
     styling: item.styling || '',
     prompt: item.prompt || (type === 'prop' ? '' : item.description) || '',
     lighting: item.lighting || '',
@@ -1686,7 +1714,7 @@ function openAssetDetail(type, item) {
 
 function closeAssetDetail() {
   assetDetail.value = { open: false, type: '', item: null }
-  assetDetailDraft.value = { appearance: '', styling: '', prompt: '', lighting: '', description: '' }
+  assetDetailDraft.value = { appearance: '', physique: '', personality: '', styling: '', prompt: '', lighting: '', description: '' }
   assetPromptDraft.value = ''
   assetPromptDirty.value = false
 }
@@ -1853,6 +1881,8 @@ async function saveAssetDetail() {
   let infoChanged = false
   if (detail.type === 'character') {
     if (assetDetailDraft.value.appearance !== (item.appearance || '')) payload.appearance = assetDetailDraft.value.appearance
+    if (assetDetailDraft.value.physique !== (item.physique || '')) payload.physique = assetDetailDraft.value.physique
+    if (assetDetailDraft.value.personality !== (item.personality || '')) payload.personality = assetDetailDraft.value.personality
     if (assetDetailDraft.value.styling !== (item.styling || '')) payload.styling = assetDetailDraft.value.styling
   } else if (detail.type === 'scene') {
     if (assetDetailDraft.value.prompt !== (item.prompt || '')) payload.prompt = assetDetailDraft.value.prompt
@@ -1865,25 +1895,67 @@ async function saveAssetDetail() {
   if (assetPromptDirty.value) payload.final_prompt = assetPromptDraft.value.trim() || ''
   if (!infoChanged && !assetPromptDirty.value) {
     toast.info(t('episode.asset.noChanges'))
-    return
+    return true
   }
   savingAssetDetail.value = true
   try {
-    if (detail.type === 'character') await characterAPI.update(item.id, payload)
+    let savedCharacter = null
+    if (detail.type === 'character') savedCharacter = await characterAPI.update(item.id, payload)
     else if (detail.type === 'scene') await sceneAPI.update(item.id, payload)
     else await propAPI.update(item.id, payload)
-    // 本地同步：手动编辑的提示词以草稿为准；仅信息字段变更时提示词已被后端置空
+    // 角色提示词是否失效取决于其来源，以服务端结果为准。
     const { final_prompt, ...infoPatch } = payload
-    const promptValue = assetPromptDirty.value ? (payload.final_prompt || null) : (infoChanged ? null : (item.final_prompt || item.finalPrompt || null))
+    const promptValue = detail.type === 'character' ? (savedCharacter?.final_prompt || null)
+      : assetPromptDirty.value ? (payload.final_prompt || null) : (item.final_prompt || item.finalPrompt || null)
     Object.assign(item, infoPatch, { final_prompt: promptValue, finalPrompt: promptValue })
     const list = detail.type === 'character' ? chars.value : detail.type === 'scene' ? scenes.value : propItems.value
     const target = list.find(x => x.id === item.id)
     if (target) Object.assign(target, infoPatch, { final_prompt: promptValue, finalPrompt: promptValue })
-    if (assetPromptDirty.value) assetPromptDraft.value = payload.final_prompt || ''
-    assetPromptDirty.value = false
+    if (savedCharacter) {
+      syncCharacterImage(item, savedCharacter)
+      if (target && target !== item) syncCharacterImage(target, savedCharacter)
+      void refresh()
+    }
+    if (assetDetail.value === detail) {
+      assetPromptDraft.value = promptValue || ''
+      assetPromptDirty.value = false
+    }
     toast.success(t('episode.asset.saved'))
+    return true
   } catch (e) {
     toastError(e, { fallback: 'episode.asset.saveFailed' })
+    return false
+  } finally {
+    savingAssetDetail.value = false
+  }
+}
+
+function syncCharacterImage(target, source) {
+  for (const [snake, camel] of [['image_url', 'imageUrl'], ['local_path', 'localPath'], ['image_revision', 'imageRevision']]) {
+    if (!(snake in source) && !(camel in source)) continue
+    const value = snake in source ? source[snake] : source[camel]
+    target[snake] = value
+    target[camel] = value
+  }
+}
+
+function characterImageRevision(character) {
+  return Number(character?.image_revision ?? character?.imageRevision ?? 0)
+}
+
+async function saveCharacterToGlobal() {
+  const item = assetDetail.value.item
+  if (assetDetail.value.type !== 'character' || !item?.id || savingAssetDetail.value) return
+  if (!await saveAssetDetail()) return
+  savingAssetDetail.value = true
+  try {
+    const saved = await characterAPI.saveGlobal(item.id)
+    item.global_character_id = saved.id
+    const target = chars.value.find(character => character.id === item.id)
+    if (target) target.global_character_id = saved.id
+    toast.success(t('episode.asset.globalSavedToast'))
+  } catch (error) {
+    toastError(error, { fallback: t('episode.asset.globalSaveFailed') })
   } finally {
     savingAssetDetail.value = false
   }
@@ -2266,12 +2338,15 @@ const videoModelMultiCfg = computed(() => hasMultiConfigs(videoModelOptions.valu
 
 // Production step helpers
 // ========== 任务列表面板 ==========
+let genTaskLoadFailures = 0
 async function loadGenTasks() {
   if (!epId.value) return
   try {
     const data = await taskAPI.listByEpisode(epId.value)
+    genTaskLoadFailures = 0
     genTasks.value = data?.tasks || []
     genMerges.value = data?.merges || []
+    assetImagesPending.value = !!data?.asset_images_pending
 
     // 生成中/失败状态只存在内存里,页面刷新后丢失;从 sys_task 记录按分镜恢复,
     // 否则已失败的镜头刷新后会退化成"待生成"
@@ -2303,7 +2378,9 @@ async function loadGenTasks() {
     }
     pendingVideoIds.value = [...pending]
     failedVideoMessages.value = failed
-  } catch { /* 静默失败,不打断其他刷新 */ }
+  } catch {
+    if (++genTaskLoadFailures >= 5) assetImagesPending.value = false
+  }
 }
 
 function stopGenTasksPolling() {
@@ -2314,6 +2391,7 @@ const genTaskActiveCount = computed(() =>
   genTasks.value.filter(t => t.status === 'processing').length +
   genMerges.value.filter(m => m.status === 'processing' || m.status === 'pending').length
 )
+const shouldPollGenTasks = computed(() => genTaskActiveCount.value > 0 || assetImagesPending.value)
 const genTaskDoneCount = computed(() =>
   genTasks.value.filter(t => t.status === 'completed').length +
   genMerges.value.filter(m => m.status === 'completed').length
@@ -2410,7 +2488,7 @@ function genTaskDuration(row) {
 
 // 后端任务在刷新/重启后仍可能运行，工作台持续同步，不依赖抽屉是否打开。
 let refreshingTasks = false
-watch(genTaskActiveCount, active => {
+watch(shouldPollGenTasks, active => {
   stopGenTasksPolling()
   if (active > 0) genTasksTimer = setInterval(async () => {
     if (refreshingTasks) return
@@ -2686,13 +2764,31 @@ function sceneShotCount(sceneId) {
 watch(rawContent, v => { localRaw.value = v }, { immediate: true })
 watch(scriptContent, v => { localScript.value = v }, { immediate: true })
 
+let refreshPromise = null
+let refreshAgain = false
+
 async function refresh() {
+  if (refreshPromise) {
+    refreshAgain = true
+    return refreshPromise
+  }
+  refreshPromise = (async () => {
+    do {
+      refreshAgain = false
+      await refreshData()
+    } while (refreshAgain)
+  })()
+  try { await refreshPromise } finally { refreshPromise = null }
+}
+
+async function refreshData() {
+  let refreshedEpisodeId = 0
   try {
     drama.value = await dramaAPI.get(dramaId)
     const ep = drama.value.episodes?.find(e => (e.episode_number || e.episodeNumber) === episodeNumber)
     if (ep) {
       episode.value = ep
-      try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
+      refreshedEpisodeId = ep.id
       try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
       try { propItems.value = await episodeAPI.props(ep.id) } catch { propItems.value = [] }
       sbs.value = await episodeAPI.storyboards(ep.id)
@@ -2718,6 +2814,23 @@ async function refresh() {
   }
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
   await Promise.all([loadGenTasks(), loadExportMerges()])
+  if (refreshedEpisodeId) {
+    try {
+      const rows = await episodeAPI.characters(refreshedEpisodeId)
+      const current = new Map(chars.value.map(character => [character.id, character]))
+      chars.value = rows.map(character => {
+        const previous = current.get(character.id)
+        return previous && characterImageRevision(previous) > characterImageRevision(character) ? previous : character
+      })
+      const detail = assetDetail.value
+      if (detail.open && detail.type === 'character' && detail.item) {
+        const character = chars.value.find(row => row.id === detail.item.id)
+        if (character && characterImageRevision(character) >= characterImageRevision(detail.item)) {
+          syncCharacterImage(detail.item, character)
+        }
+      }
+    } catch { chars.value = [] }
+  }
 }
 
 function saveRaw() { episodeAPI.update(epId.value, { content: localRaw.value }); episode.value.content = localRaw.value }
@@ -3420,7 +3533,7 @@ async function pollVideoGeneration(generationId, storyboardId) {
     } catch {}
   }
   // 页面等待结束不代表上游失败；后续由任务列表轮询继续跟踪。
-  await loadGenTasks()
+  await refresh()
 }
 async function doMerge(ids) {
   const storyboardIds = Array.isArray(ids) ? ids : undefined

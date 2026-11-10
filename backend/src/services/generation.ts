@@ -16,6 +16,7 @@ import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 import { applyCodeccBrowserUserAgent } from '../agents/thinking-off.js'
 import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isOfficialXaiBase, isRetryableImageGatewayStatus, officialXaiEditsTarget, promptAfterEditsFallback, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
+import { characterTaskMatchesRevision } from './character-image.js'
 
 type TaskType = 'image' | 'video'
 
@@ -47,6 +48,7 @@ interface GenerateImageParams {
   referenceImages?: string[]
   frameType?: string
   configId?: number
+  characterImageRevision?: number
 }
 
 interface GenerateVideoParams {
@@ -75,6 +77,9 @@ interface GenerateVideoParams {
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<number> {
+  const character = params.characterId
+    ? (await db.select().from(schema.characters).where(eq(schema.characters.id, params.characterId)))[0]
+    : null
   // 指定配置（集锁定）可能已停用/删除/厂商收敛，失效时回退到当前启用配置，避免生成被旧引用卡死
   const config = params.configId
     ? (await getConfigById(params.configId)) ?? await getActiveConfig('image')
@@ -93,6 +98,7 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     size: params.size || '1920x1080',
     frameType: params.frameType,
     referenceImages: params.referenceImages,
+    characterImageRevision: params.characterImageRevision ?? character?.imageRevision,
   })
 
   logTaskStart('ImageTask', 'enqueue', {
@@ -530,30 +536,28 @@ async function handleImageComplete(record: SysTaskRecord, imageUrl: string) {
   // 列表页缩略图（前端按命名约定推导地址，失败不影响主流程）
   await generateImageThumb(localPath)
 
+  await writeBackImageAssets(record, localPath)
   await db.update(schema.sysTask)
     .set({ resultUrl: imageUrl, localPath, status: 'completed', completedAt: now(), updatedAt: now() })
     .where(eq(schema.sysTask.id, record.id))
 
   logTaskSuccess('ImageTask', 'downloaded', { id: record.id, provider: record.provider, localPath })
-
-  await writeBackImageAssets(record, localPath)
 }
 
 async function handleImageCompleteBase64(record: SysTaskRecord, base64Data: string, mimeType: string) {
   const localPath = await saveBase64Image(base64Data, mimeType, 'images')
   await generateImageThumb(localPath)
 
+  await writeBackImageAssets(record, localPath)
   await db.update(schema.sysTask)
     .set({ localPath, status: 'completed', completedAt: now(), updatedAt: now() })
     .where(eq(schema.sysTask.id, record.id))
 
   logTaskSuccess('ImageTask', 'saved-base64', { id: record.id, provider: record.provider, mimeType, localPath })
-
-  await writeBackImageAssets(record, localPath)
 }
 
 // 图片完成后回写业务表：分镜(按 frameType)、角色、场景、道具
-async function writeBackImageAssets(record: SysTaskRecord, localPath: string) {
+export async function writeBackImageAssets(record: SysTaskRecord, localPath: string) {
   const params = parseTaskParams(record.params)
   if (record.storyboardId) {
     const sbUpdate: Record<string, any> = { updatedAt: now() }
@@ -563,7 +567,11 @@ async function writeBackImageAssets(record: SysTaskRecord, localPath: string) {
     await db.update(schema.storyboards).set(sbUpdate).where(eq(schema.storyboards.id, record.storyboardId))
   }
   if (record.characterId) {
-    await db.update(schema.characters).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.characters.id, record.characterId))
+    const [character] = await db.select().from(schema.characters).where(eq(schema.characters.id, record.characterId))
+    if (character && characterTaskMatchesRevision(record.params, character.imageRevision)) {
+      await db.update(schema.characters).set({ imageUrl: localPath, localPath, imageAuto: true, updatedAt: now() })
+        .where(and(eq(schema.characters.id, record.characterId), eq(schema.characters.imageRevision, character.imageRevision)))
+    }
   }
   if (record.sceneId) {
     await db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId))

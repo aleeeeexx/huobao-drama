@@ -10,6 +10,7 @@ import { ensureCharacterFinalPrompt, ensurePropFinalPrompt, ensureSceneFinalProm
 import { generateImage } from './generation.js'
 import { getDramaStylePrompt } from './style-preset.js'
 import { ASSET_REFERENCE_FRAME, decideAssetEnqueue, isAssetReferenceTask } from './rpg/references.js'
+import { characterTaskMatchesRevision, parseCharacterReferenceImages } from './character-image.js'
 
 export const CHARACTER_IMAGE_SIZE = '1920x1080'
 export const PROP_IMAGE_SIZE = '1024x1024'
@@ -22,6 +23,7 @@ type AssetRow = {
   finalPrompt: string | null
   imageUrl: string | null
   localPath: string | null
+  imageRevision?: number
 }
 
 export interface AssetImageOptions {
@@ -48,11 +50,16 @@ const pendingAssetImages = new Map<string, Promise<EnqueuedAssetImage>>()
 const episodeAssetJobs = new Map<number, Promise<void>>()
 const episodeAssetRerun = new Set<number>()
 
-export function characterImagePrompt(char: { name: string; appearance?: string | null; description?: string | null; styling?: string | null }, stylePrompt = '') {
+export function isEpisodeAssetImagesPending(episodeId: number) {
+  return episodeAssetJobs.has(episodeId)
+}
+
+export function characterImagePrompt(char: { name: string; appearance?: string | null; physique?: string | null; description?: string | null; styling?: string | null }, stylePrompt = '') {
   return [
     stylePrompt || '',
     char.name,
     char.appearance || char.description || '人物立绘',
+    char.physique || '',
     char.styling || '',
     '16:9 横版角色定妆照',
     '半身角色海报构图',
@@ -119,7 +126,7 @@ export async function enqueueAssetReferenceImage(
   const row = await loadAsset(kind, id)
   if (!row) throw new Error(missingAssetMessage(kind))
   const imageUrl = storedImage(row)
-  const latest = options.skipIfPresent ? await latestAssetTask(kind, id) : null
+  const latest = options.skipIfPresent ? await latestAssetTask(kind, id, row.imageRevision) : null
   const decision = decideAssetEnqueue({
     hasImage: !!imageUrl,
     latestStatus: taskStatus(latest?.status),
@@ -136,9 +143,9 @@ export async function enqueueAssetReferenceImage(
     return { taskId: null, imageUrl: null, finalPrompt: row.finalPrompt || '' }
   }
   if (options.skipIfPresent) {
-    return coalesceAssetImage(`${kind}:${id}`, () => submitAssetImage(kind, id, options))
+    return coalesceAssetImage(`${kind}:${id}:${row.imageRevision ?? 0}`, () => submitAssetImage(kind, id, options, row.imageRevision))
   }
-  return submitAssetImage(kind, id, options)
+  return submitAssetImage(kind, id, options, row.imageRevision)
 }
 
 export async function resolveAssetReferenceImage(
@@ -172,6 +179,7 @@ export async function waitForAssetImage(
     const imageUrl = row ? storedImage(row) : null
     if (imageUrl) return imageUrl
     const [task] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, taskId))
+    if (kind === 'character' && row && task && !characterTaskMatchesRevision(task.params, row.imageRevision ?? 0)) return null
     if (!task || task.status === 'failed') return null
     if (task.status === 'completed') return task.localPath || task.resultUrl || null
     if (Date.now() >= deadline) {
@@ -216,13 +224,14 @@ async function enqueueQuietly(kind: AssetKind, id: number, options: AssetImageOp
   }
 }
 
-async function submitAssetImage(kind: AssetKind, id: number, options: AssetImageOptions): Promise<EnqueuedAssetImage> {
+async function submitAssetImage(kind: AssetKind, id: number, options: AssetImageOptions, expectedRevision?: number): Promise<EnqueuedAssetImage> {
   const row = await loadAsset(kind, id)
   if (!row) throw new Error(missingAssetMessage(kind))
+  if (kind === 'character' && row.imageRevision !== expectedRevision) throw new Error('角色资料已更新，请重新生成图片')
   if (options.skipIfPresent) {
     const imageUrl = storedImage(row)
     if (imageUrl) return { taskId: null, imageUrl, finalPrompt: row.finalPrompt || '' }
-    const latest = await latestAssetTask(kind, id)
+    const latest = await latestAssetTask(kind, id, row.imageRevision)
     if (latest?.status === 'processing') {
       return { taskId: latest.id, imageUrl: null, finalPrompt: row.finalPrompt || '' }
     }
@@ -232,7 +241,11 @@ async function submitAssetImage(kind: AssetKind, id: number, options: AssetImage
   const stylePrompt = await getDramaStylePrompt(row.dramaId)
   if (kind === 'character') {
     const char = await mustCharacter(id)
-    const finalPrompt = await ensureCharacterFinalPrompt(char, options.episodeId, false, textOpts)
+    if (char.imageRevision !== expectedRevision) throw new Error('角色资料已更新，请重新生成图片')
+    const referenceImages = parseCharacterReferenceImages(char.referenceImages)
+    const finalPrompt = await ensureCharacterFinalPrompt(char, options.episodeId, false, { ...textOpts, forImageSubmission: true })
+    const current = await mustCharacter(id)
+    if (current.imageRevision !== char.imageRevision) throw new Error('角色资料已更新，请重新生成图片')
     const prompt = finalPrompt || characterImagePrompt(char, stylePrompt)
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: options.episodeId, dramaId: char.dramaId })
     const taskId = await generateImage({
@@ -241,6 +254,8 @@ async function submitAssetImage(kind: AssetKind, id: number, options: AssetImage
       prompt,
       model: options.model || undefined,
       size: CHARACTER_IMAGE_SIZE,
+      referenceImages,
+      characterImageRevision: char.imageRevision,
       configId,
       frameType: ASSET_REFERENCE_FRAME,
     })
@@ -324,7 +339,7 @@ async function loadEpisodeAssetIds(dramaId: number, episodeId: number) {
   }
 }
 
-async function latestAssetTask(kind: AssetKind, id: number) {
+async function latestAssetTask(kind: AssetKind, id: number, revision?: number) {
   const column = kind === 'character'
     ? schema.sysTask.characterId
     : kind === 'scene'
@@ -334,7 +349,7 @@ async function latestAssetTask(kind: AssetKind, id: number) {
     .where(and(eq(schema.sysTask.type, 'image'), eq(column, id)))
     .orderBy(desc(schema.sysTask.id))
     .limit(12)
-  return rows.find(row => isAssetReferenceTask({
+  return rows.find(row => (kind !== 'character' || characterTaskMatchesRevision(row.params, revision ?? 0)) && isAssetReferenceTask({
     frameType: readFrameType(row.params),
     prompt: row.prompt,
     storyboardId: row.storyboardId,

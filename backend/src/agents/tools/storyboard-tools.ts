@@ -115,7 +115,8 @@ const readStoryboardContext = createTool({
     const [ep] = await db.select().from(schema.episodes)
       .where(eq(schema.episodes.id, episodeId))
     if (!ep) return { error: 'Episode not found' }
-    const script = ep.scriptContent || ep.content
+    const turnScript = context?.requestContext?.get('storyboardScript' as never)
+    const script = typeof turnScript === 'string' ? turnScript : ep.scriptContent || ep.content
     if (!script) return { error: 'Episode has no script' }
 
     const charLinks = await db.select().from(schema.episodeCharacters)

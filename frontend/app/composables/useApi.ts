@@ -71,6 +71,15 @@ export const characterAPI = {
   generatePrompt: (id: number, episodeId: number, force = false, textModel?: string, textConfigId?: number) => api.post(`/characters/${id}/generate-prompt`, { episode_id: episodeId, force, text_model: textModel || undefined, text_config_id: textConfigId || undefined }),
   generateImage: (id: number, episodeId: number, model?: string, configId?: number, textModel?: string, textConfigId?: number) => api.post(`/characters/${id}/generate-image`, { episode_id: episodeId, model: model || undefined, config_id: configId || undefined, text_model: textModel || undefined, text_config_id: textConfigId || undefined }),
   batchImages: (ids: number[], episodeId: number, model?: string, configId?: number, textModel?: string, textConfigId?: number) => api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId, model: model || undefined, config_id: configId || undefined, text_model: textModel || undefined, text_config_id: textConfigId || undefined }),
+  saveGlobal: (id: number) => api.post(`/characters/${id}/save-global`),
+}
+
+export const globalCharacterAPI = {
+  list: () => api.get<any[]>('/global-characters'),
+  generate: (concept: string) => api.post<any>('/global-characters/generate', { concept }),
+  create: (data: any) => api.post('/global-characters', data),
+  update: (id: number, data: any) => api.put(`/global-characters/${id}`, data),
+  delete: (id: number) => api.del(`/global-characters/${id}`),
 }
 
 export const sceneAPI = {
@@ -104,7 +113,7 @@ export const taskAPI = {
     return api.get(`/tasks${query.size ? `?${query.toString()}` : ''}`)
   },
   // 按集聚合生成任务（sys_task + video_merges）
-  listByEpisode: (episodeId: number) => api.get<{ tasks: any[]; merges: any[] }>(`/episodes/${episodeId}/generation-tasks`),
+  listByEpisode: (episodeId: number) => api.get<{ tasks: any[]; merges: any[]; asset_images_pending: boolean }>(`/episodes/${episodeId}/generation-tasks`),
 }
 
 async function uploadReq<T = any>(path: string, file: File): Promise<T> {
@@ -181,9 +190,11 @@ export const serverUpdateAPI = {
 
 export const rpgAPI = {
   worlds: () => api.get('/rpg/worlds'),
+  globalCharacters: () => globalCharacterAPI.list(),
   sessions: () => api.get('/rpg/sessions'),
   createSession: (data: any) => api.post('/rpg/sessions', data),
   session: (id: number) => api.get(`/rpg/sessions/${id}`),
+  updatePlayerCharacter: (id: number, data: any) => api.put(`/rpg/sessions/${id}/player-character`, data),
   illustrate: (id: number, body?: { force?: boolean; turn_id?: number }) => api.post(`/rpg/sessions/${id}/image`, body),
   film: (id: number, body?: { turn_id?: number }) => api.post(`/rpg/sessions/${id}/video`, body),
 }

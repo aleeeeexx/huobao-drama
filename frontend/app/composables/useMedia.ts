@@ -7,6 +7,11 @@
  * 存量文件可用 `npm run backfill-artwork`（backend）补齐。
  */
 
+/** 后端保存的本地相对路径需要从网站根目录解析。 */
+export function publicMediaUrl(url: string | null | undefined): string {
+  return url?.startsWith('static/') ? `/${url}` : url || ''
+}
+
 /** 图片地址 → 缩略图地址；非 /static 图片（远程 URL 等）原样返回 */
 export function thumbOf(url: string): string {
   if (!url || !url.includes('/static/')) return url

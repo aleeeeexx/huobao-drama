@@ -49,14 +49,21 @@ export const sqliteSchemaStatements = [
   `CREATE TABLE IF NOT EXISTS characters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     drama_id INTEGER NOT NULL,
+    global_character_id INTEGER,
+    manual_override INTEGER NOT NULL DEFAULT 0,
+    image_revision INTEGER NOT NULL DEFAULT 0,
     name TEXT NOT NULL,
     role TEXT,
     description TEXT,
+    background TEXT,
     appearance TEXT,
+    physique TEXT,
     styling TEXT,
     final_prompt TEXT,
+    final_prompt_auto INTEGER NOT NULL DEFAULT 0,
     personality TEXT,
     image_url TEXT,
+    image_auto INTEGER NOT NULL DEFAULT 0,
     reference_images TEXT,
     seed_value TEXT,
     sort_order INTEGER,
@@ -65,6 +72,22 @@ export const sqliteSchemaStatements = [
     updated_at TEXT NOT NULL,
     deleted_at TEXT
   )`,
+
+  `CREATE TABLE IF NOT EXISTS global_characters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    role TEXT,
+    appearance TEXT,
+    physique TEXT,
+    default_personality TEXT,
+    default_styling TEXT,
+    image_url TEXT,
+    reference_images TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_global_characters_name ON global_characters (name)`,
 
   `CREATE TABLE IF NOT EXISTS scenes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,6 +341,7 @@ export const sqliteSchemaStatements = [
     status TEXT NOT NULL DEFAULT 'active',
     world_state TEXT NOT NULL,
     novel_state TEXT,
+    player_character TEXT,
     play_kind TEXT NOT NULL DEFAULT 'rpg',
     turn_count INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -334,6 +358,7 @@ export const sqliteSchemaStatements = [
     player_text TEXT,
     choice_id TEXT,
     narrative TEXT NOT NULL,
+    screenplay TEXT,
     choices TEXT NOT NULL,
     world_state TEXT NOT NULL,
     scene_id INTEGER,
@@ -447,6 +472,51 @@ export function initSqliteSchema(sqlite: Database.Database) {
   }
   if (sessionColumns.size && !sessionColumns.has('play_kind')) {
     sqlite.exec("ALTER TABLE rpg_sessions ADD COLUMN play_kind TEXT NOT NULL DEFAULT 'rpg'")
+  }
+  if (sessionColumns.size && !sessionColumns.has('player_character')) {
+    sqlite.exec('ALTER TABLE rpg_sessions ADD COLUMN player_character TEXT')
+  }
+  const turnColumns = new Set((sqlite.prepare('PRAGMA table_info(rpg_turns)').all() as { name: string }[]).map(c => c.name))
+  if (turnColumns.size && !turnColumns.has('screenplay')) {
+    sqlite.exec('ALTER TABLE rpg_turns ADD COLUMN screenplay TEXT')
+  }
+  const characterColumns = new Set((sqlite.prepare('PRAGMA table_info(characters)').all() as { name: string }[]).map(c => c.name))
+  if (characterColumns.size && !characterColumns.has('global_character_id')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN global_character_id INTEGER')
+  }
+  if (characterColumns.size && !characterColumns.has('physique')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN physique TEXT')
+  }
+  if (characterColumns.size && !characterColumns.has('background')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN background TEXT')
+  }
+  if (characterColumns.size && !characterColumns.has('manual_override')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0')
+  }
+  if (characterColumns.size && !characterColumns.has('image_revision')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN image_revision INTEGER NOT NULL DEFAULT 0')
+  }
+  if (characterColumns.size && !characterColumns.has('final_prompt_auto')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN final_prompt_auto INTEGER NOT NULL DEFAULT 0')
+  }
+  if (characterColumns.size && !characterColumns.has('image_auto')) {
+    sqlite.exec('ALTER TABLE characters ADD COLUMN image_auto INTEGER NOT NULL DEFAULT 0')
+  }
+  // Repair links left by older versions while retaining the same extraction protection.
+  sqlite.exec(`UPDATE characters SET global_character_id = NULL, manual_override = 1
+    WHERE global_character_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM global_characters WHERE global_characters.id = characters.global_character_id
+        AND global_characters.deleted_at IS NULL
+    )`)
+  if (characterColumns.has('deleted_at') && characterColumns.has('drama_id') && sessionColumns.has('drama_id')) {
+    sqlite.exec(`UPDATE characters SET deleted_at = NULL
+      WHERE deleted_at IS NOT NULL AND EXISTS (
+        SELECT 1 FROM rpg_sessions WHERE rpg_sessions.drama_id = characters.drama_id
+          AND rpg_sessions.play_kind <> 'novel'
+          AND CASE WHEN json_valid(rpg_sessions.player_character)
+            THEN CASE WHEN json_type(rpg_sessions.player_character, '$.project_character_id') = 'integer'
+              THEN json_extract(rpg_sessions.player_character, '$.project_character_id') END END = characters.id
+      )`)
   }
   const insertSeed = sqlite.prepare(SEED_SQL)
   const upgradeSeed = sqlite.prepare(UPGRADE_SQL)

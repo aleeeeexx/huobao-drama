@@ -11,7 +11,7 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { db, schema } from '../../db/index.js'
-import { eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { getDramaStylePrompt } from '../../services/style-preset.js'
 import { getDramaId } from '../context.js'
@@ -35,6 +35,7 @@ const readCharacters = createTool({
         role: c.role || '',
         description: c.description || '',
         appearance: c.appearance || '',
+        physique: c.physique || '',
         styling: c.styling || '',
         final_prompt: c.finalPrompt || '',
       })),
@@ -58,9 +59,15 @@ const saveCharacterFinalPrompt = createTool({
 
     const stylePrompt = await getDramaStylePrompt(dramaId)
     const finalPrompt = stylePrompt ? `${stylePrompt}, ${prompt}` : prompt
-    await db.update(schema.characters)
-      .set({ finalPrompt, updatedAt: now() })
-      .where(eq(schema.characters.id, character_id))
+    const expected = context?.requestContext?.get('characterImageRevision' as never) as { id: number; revision: number; invalidateOnSave?: boolean } | undefined
+    if (expected?.id === character_id && expected.revision !== c.imageRevision) return { error: '角色资料已更新，请重新生成提示词' }
+    const result = await db.update(schema.characters)
+      .set({ finalPrompt, finalPromptAuto: true,
+        ...(expected?.invalidateOnSave === false ? {} : { imageRevision: sql`${schema.characters.imageRevision} + 1` }), updatedAt: now() })
+      .where(expected?.id === character_id
+        ? and(eq(schema.characters.id, character_id), eq(schema.characters.imageRevision, expected.revision))
+        : eq(schema.characters.id, character_id))
+    if (!result.changes) return { error: '角色资料已更新，请重新生成提示词' }
 
     return {
       character_id: c.id,

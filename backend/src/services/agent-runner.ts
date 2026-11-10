@@ -12,10 +12,14 @@ export interface StudioAgentRun {
   dramaId: number
   message: string
   maxSteps?: number
+  timeoutMs?: number
   model?: string
   configId?: number
   /** 幻书追加单条分镜时设置。保存工具会拒绝清空其他分镜。 */
   storyboardShotNumber?: number
+  extractionScript?: string
+  screenplayRewrite?: { source: string; saved?: string }
+  storyboardScript?: string
   onTextDelta?: (delta: string) => Promise<void> | void
   onStepFinish?: (step: any) => void
 }
@@ -29,12 +33,16 @@ export async function runStudioAgent(input: StudioAgentRun): Promise<{ text: str
     modelOverride: input.model || undefined,
     textConfigId: input.configId || undefined,
     storyboardShotNumber: input.storyboardShotNumber,
+    extractionScript: input.extractionScript,
+    screenplayRewrite: input.screenplayRewrite,
+    storyboardScript: input.storyboardScript,
   })
   const messages = [{ role: 'user' as const, content: input.message }]
   const options: Record<string, unknown> = {
     maxSteps: input.maxSteps ?? 12,
     requestContext,
   }
+  if (input.timeoutMs && input.timeoutMs > 0) options.abortSignal = AbortSignal.timeout(input.timeoutMs)
   if (input.onStepFinish) options.onStepFinish = input.onStepFinish
   if (input.onTextDelta) return streamAgentText(agent, messages, options, input.onTextDelta)
   const result = await agent.generate(messages as any, options as any)

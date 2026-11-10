@@ -11,10 +11,11 @@ import { createTool } from '@mastra/core/tools'
 import type { ToolExecutionContext } from '@mastra/core/tools'
 import { z } from 'zod'
 import { db, getInsertId, schema } from '../../db/index.js'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
 import { getDramaId, getEpisodeId } from '../context.js'
+import { snapshotCharacterReferences } from '../../services/character-image.js'
 
 // ─── 关联辅助 ────────────────────────────────────────────────
 async function linkCharToEpisode(episodeId: number, characterId: number) {
@@ -85,7 +86,8 @@ const readScriptForExtraction = createTool({
     const [ep] = await db.select().from(schema.episodes)
       .where(eq(schema.episodes.id, episodeId))
     if (!ep) return { error: 'Episode not found' }
-    const content = ep.scriptContent || ep.content
+    const snapshot = context?.requestContext?.get('extractionScript' as never)
+    const content = typeof snapshot === 'string' ? snapshot : ep.scriptContent || ep.content
     if (!content) return { error: 'Episode has no script content' }
     logTaskSuccess('ExtractTool', 'read-script', { episodeId, dramaId, scriptLength: content.length })
     return { script: content }
@@ -111,8 +113,13 @@ const readExistingCharacters = createTool({
       id: c.id,
       name: c.name,
       role: c.role || '',
+      description: c.description || '',
       appearance: c.appearance || '',
+      physique: c.physique || '',
+      personality: c.personality || '',
+      background: c.background || '',
       styling: c.styling || '',
+      manually_edited: c.manualOverride,
       normalized_name: normalizeName(c.name), // 用于判断近名复用：括号定位/别名视为同名
     }))
     const payload = {
@@ -177,7 +184,10 @@ const saveDedupCharacters = createTool({
       name: z.string(),
       role: z.string().optional(),
       description: z.string().optional(),
+      background: z.string().optional(),
       appearance: z.string().optional(),
+      physique: z.string().optional(),
+      personality: z.string().optional(),
       styling: z.string().optional(),
     })),
   }),
@@ -187,6 +197,13 @@ const saveDedupCharacters = createTool({
     const { episodeId, dramaId } = ids
     const ts = now()
     const results = { created: 0, merged: 0 }
+    const sessions = await db.select().from(schema.rpgSessions).where(eq(schema.rpgSessions.dramaId, dramaId))
+    const playerCharacterIds = new Set(sessions.flatMap(session => {
+      try {
+        const id = JSON.parse(session.playerCharacter || 'null')?.project_character_id
+        return typeof id === 'number' ? [id] : []
+      } catch { return [] }
+    }))
     logTaskProgress('ExtractTool', 'save-characters-begin', {
       episodeId,
       dramaId,
@@ -194,8 +211,8 @@ const saveDedupCharacters = createTool({
     })
 
     for (const char of characters) {
-      const charsInProject = (await db.select().from(schema.characters)
-        .where(eq(schema.characters.dramaId, dramaId)))
+      const charsInProject = db.select().from(schema.characters)
+        .where(eq(schema.characters.dramaId, dramaId)).all()
         .filter(c => !c.deletedAt)
       const exact = charsInProject.find(c => c.name === char.name)
       const normName = normalizeName(char.name)
@@ -206,13 +223,31 @@ const saveDedupCharacters = createTool({
         // 归一化命中：括号定位/别名等近名视作同一角色复用，避免重复创建
         if (matchedViaNorm) logTaskProgress('ExtractTool', 'save-characters-reuse', { episodeId, dramaId, extracted: char.name, reused: existing.name })
         // 已存在：合并信息，保留 ID
-        await db.update(schema.characters).set({
-          role: char.role || existing.role,
-          description: char.description || existing.description,
-          appearance: char.appearance || existing.appearance,
-          styling: char.styling || char.description || existing.styling,
-          updatedAt: ts,
-        }).where(eq(schema.characters.id, existing.id))
+        if (!playerCharacterIds.has(existing.id)) {
+          const merge = (current: string | null, extracted?: string) => existing.manualOverride || existing.globalCharacterId
+            ? current || extracted || '' : extracted || current || ''
+          const merged = {
+            role: merge(existing.role, char.role),
+            description: merge(existing.description, char.description),
+            background: merge(existing.background, char.background),
+            appearance: merge(existing.appearance, char.appearance),
+            physique: merge(existing.physique, char.physique),
+            personality: merge(existing.personality, char.personality),
+            styling: merge(existing.styling, char.styling || char.description),
+          }
+          const changed = Object.entries(merged).some(([key, value]) => value !== ((existing as Record<string, unknown>)[key] || ''))
+          db.update(schema.characters).set({
+            ...merged,
+            ...(sessions.length && changed ? {
+              referenceImages: snapshotCharacterReferences(existing.imageUrl || existing.localPath, existing.referenceImages),
+              imageUrl: null,
+              localPath: null,
+              finalPrompt: sql`CASE WHEN ${schema.characters.finalPromptAuto} = 1 THEN NULL ELSE ${schema.characters.finalPrompt} END`,
+              imageRevision: sql`${schema.characters.imageRevision} + 1`,
+            } : {}),
+            updatedAt: ts,
+          }).where(eq(schema.characters.id, existing.id)).run()
+        }
         await linkCharToEpisode(episodeId, existing.id)
         results.merged++
       } else {
@@ -221,7 +256,10 @@ const saveDedupCharacters = createTool({
           name: char.name,
           role: char.role || '',
           description: char.description || '',
+          background: char.background || '',
           appearance: char.appearance || '',
+          physique: char.physique || '',
+          personality: char.personality || '',
           styling: char.styling || char.description || '',
           dramaId,
           createdAt: ts,

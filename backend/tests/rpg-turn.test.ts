@@ -9,6 +9,7 @@ import {
   previousChapterExcerpt,
   choicesFromPayload,
   emptyWorldState,
+  formatWorldCharacterGuidance,
   formatScreenplayScene,
   locationFromNarrativeHeader,
   narrativeFromScreenplay,
@@ -456,15 +457,49 @@ test('episode plates keep a public image path, including a local file when image
   assert.equal(publicAssetPath('https://cdn.example/a.png'), 'https://cdn.example/a.png')
   assert.equal(publicAssetPath('static/images/a.png'), '/static/images/a.png')
   const assets = serializePlayAssets({
-    characters: [{ id: 1, name: '老板娘', imageUrl: 'static/images/host.png' }],
+    characters: [{
+      id: 1,
+      name: '老板娘',
+      role: '茶寮掌柜',
+      description: '沉着寡言',
+      background: '曾在北境做过药师',
+      appearance: '短发，眉间有痣',
+      physique: '身形清瘦',
+      personality: '谨慎',
+      styling: '墨绿长衫',
+      globalCharacterId: 9,
+      imageUrl: 'static/images/host.png',
+    }],
     scenes: [{ id: 4, location: '雾隐茶寮', time: '子时', imageUrl: '  ', localPath: 'static/images/scene.png' }],
     props: [{ id: 8, name: '茶券', imageUrl: null, localPath: null }],
   })
   assert.equal(assets.characters[0].name, '老板娘')
+  assert.equal(assets.characters[0].role, '茶寮掌柜')
+  assert.equal(assets.characters[0].background, '曾在北境做过药师')
+  assert.equal(assets.characters[0].appearance, '短发，眉间有痣')
+  assert.equal(assets.characters[0].physique, '身形清瘦')
+  assert.equal(assets.characters[0].personality, '谨慎')
+  assert.equal(assets.characters[0].styling, '墨绿长衫')
+  assert.equal(assets.characters[0].global_character_id, 9)
   assert.equal(assets.characters[0].image_url, '/static/images/host.png')
   assert.equal(assets.scenes[0].location, '雾隐茶寮')
   assert.equal(assets.scenes[0].time, '子时')
   assert.equal(assets.scenes[0].image_url, '/static/images/scene.png')
   assert.equal(assets.props[0].name, '茶券')
   assert.equal(assets.props[0].image_url, null)
+})
+
+test('world character guidance includes world-specific character notes and stays bounded', () => {
+  const guidance = formatWorldCharacterGuidance([{
+    name: '老板娘',
+    role: '茶寮掌柜',
+    appearance: '短发，眉间有痣',
+    physique: '身形清瘦',
+    personality: '本世界谨慎多疑',
+    background: '曾在北境做过药师',
+    styling: '墨绿长衫',
+  }])
+  assert.match(guidance, /本世界性格：本世界谨慎多疑/)
+  assert.match(guidance, /本世界背景经历：曾在北境做过药师/)
+  assert.match(guidance, /本世界服装：墨绿长衫/)
 })

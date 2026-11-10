@@ -516,17 +516,65 @@ export function projectWorldState(
 
 export function sceneIdFromScreenplay(
   script: string,
-  turnIndex: number,
-  scenes: Array<{ id: number; location: string }>,
+  scenes: Array<{ id: number; location: string; time?: string | null }>,
 ): number | null {
-  const header = script.match(new RegExp(`##\\s*S${turnIndex}\\b[^\\n]*`))
-  if (!header) return null
-  const matched = scenes.find(scene => scene.location && header[0].includes(scene.location))
-  return matched?.id ?? null
+  const location = lastScreenplayLocation(script)
+  if (!location) return null
+  const normalize = (value: string) => value.replace(/\s+/g, '').toLowerCase()
+  const sameLocation = scenes.filter(scene => normalize(scene.location) === normalize(location.location))
+  const sameTime = sameLocation.filter(scene => normalize(scene.time || '') === normalize(location.time))
+  if (sameTime.length === 1) return sameTime[0].id
+  return sameLocation.length === 1 && !sameLocation[0].time ? sameLocation[0].id : null
 }
 
-export function scriptHasScene(script: string, turnIndex: number): boolean {
-  return new RegExp(`##\\s*S${turnIndex}\\b`).test(script || '')
+export function lastScreenplayLocation(script: string): { location: string; time: string } | null {
+  const headers = [...script.matchAll(/^[ \t]*##[ \t]*S\d+\b[^\r\n]*/gim)]
+  const header = headers.at(-1)?.[0]
+  return header ? locationFromNarrativeHeader(header.trim()) : null
+}
+
+export function appendTurnScreenplay(
+  existing: string,
+  rewritten: string,
+  state: RpgWorldState,
+  narrative: string,
+  action: string | null,
+): { script: string; screenplay: string; hasLocation: boolean } {
+  let nextNumber = 1
+  for (const match of existing.matchAll(/^[ \t]*##[ \t]*S(\d+)\b/gim)) {
+    nextNumber = Math.max(nextNumber, Number(match[1]) + 1)
+  }
+  let screenplay = stripChoiceTail(rewritten).trim()
+  const headings = [...screenplay.matchAll(/^[ \t]*##[ \t]*S\d+\b[^\r\n]*/gim)]
+  const hasBody = headings.length > 0 && headings.every((heading, index) =>
+    screenplay.slice(heading.index! + heading[0].length, headings[index + 1]?.index).trim(),
+  )
+  let hasLocation = true
+  if (hasBody) {
+    screenplay = screenplay.replace(/^([ \t]*##[ \t]*S)\d+\b/gim, (_match, prefix: string) => `${prefix}${nextNumber++}`)
+  } else {
+    const header = locationFromNarrativeHeader(narrative)
+    hasLocation = !!header
+    const fallbackState = header ? { ...state, scene: { ...state.scene, ...header } } : state
+    screenplay = formatScreenplayScene(nextNumber, fallbackState, visibleNarrative(narrative), action).trim()
+  }
+  return { script: `${existing}${existing ? '\n\n' : ''}${screenplay}`, screenplay, hasLocation }
+}
+
+export function currentTurnScreenplay(script: string, saved: string): string {
+  const headings = (text: string) => [...text.matchAll(/^[ \t]*##[ \t]*S(\d+)\b[^\r\n]*/gim)]
+  const expected = headings(saved)
+  const current = headings(script)
+  if (!expected.length) return ''
+  const start = current.findIndex(item => item[1] === expected[0][1])
+  if (start < 0) return ''
+  for (let index = 0; index < expected.length; index++) {
+    const item = current[start + index]
+    // 场景编号标识回合归属；地点、时段等场景头内容允许在制作台编辑。
+    if (!item || item[1] !== expected[index][1]) return ''
+    if (current.filter(candidate => candidate[1] === item[1]).length !== 1) return ''
+  }
+  return script.slice(current[start].index, current[start + expected.length]?.index).trim()
 }
 
 export function narrativeFromScreenplay(script: string, turnIndex: number): string {
@@ -1055,10 +1103,39 @@ export function publicAssetPath(value: string | null | undefined) {
 export interface PlayAssetPlate {
   id: number
   name?: string | null
+  role?: string | null
+  description?: string | null
+  background?: string | null
+  appearance?: string | null
+  physique?: string | null
+  personality?: string | null
+  styling?: string | null
+  globalCharacterId?: number | null
   location?: string | null
   time?: string | null
   imageUrl?: string | null
   localPath?: string | null
+}
+
+export function formatWorldCharacterGuidance(characters: Array<Pick<PlayAssetPlate,
+  'name' | 'role' | 'appearance' | 'physique' | 'personality' | 'background' | 'styling'
+>>) {
+  return characters.slice(0, 8).map((character) => {
+    const name = clip(character.name || '', 40)
+    if (!name) return ''
+    const details = [
+      ['身份', character.role],
+      ['固定外貌', character.appearance],
+      ['身材体态', character.physique],
+      ['本世界性格', character.personality],
+      ['本世界背景经历', character.background],
+      ['本世界服装', character.styling],
+    ].flatMap(([label, value]) => {
+      const text = clip(String(value || ''), 180)
+      return text ? [`${label}：${text}`] : []
+    })
+    return details.length ? `- ${name}：${details.join('；')}` : ''
+  }).filter(Boolean).join('\n')
 }
 
 function plateImagePath(imageUrl?: string | null, localPath?: string | null) {
@@ -1077,6 +1154,14 @@ export function serializePlayAssets(assets: {
     characters: assets.characters.map(item => ({
       id: item.id,
       name: item.name || '',
+      role: item.role || '',
+      description: item.description || '',
+      background: item.background || '',
+      appearance: item.appearance || '',
+      physique: item.physique || '',
+      personality: item.personality || '',
+      styling: item.styling || '',
+      global_character_id: item.globalCharacterId || null,
       image_url: plateImagePath(item.imageUrl, item.localPath),
     })),
     scenes: assets.scenes.map(item => ({

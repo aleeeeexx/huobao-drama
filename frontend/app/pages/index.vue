@@ -8,6 +8,32 @@
       </p>
     </header>
 
+    <section class="hero-picker" aria-label="选择玩家主角">
+      <div class="hero-picker-head">
+        <div>
+          <h2>选择主角</h2>
+          <p class="dim">可选全局角色，也可以根据世界设定自动生成本局主角。</p>
+        </div>
+        <NuxtLink to="/characters" class="library-link">管理角色库</NuxtLink>
+      </div>
+      <div v-if="globalCharacters.length" class="hero-options">
+        <button
+          v-for="character in globalCharacters"
+          :key="character.id"
+          type="button"
+          :class="['hero-option', { selected: selectedCharacterId === character.id }]"
+          :aria-pressed="selectedCharacterId === character.id"
+          @click="selectedCharacterId = selectedCharacterId === character.id ? null : character.id"
+        >
+          <img v-if="character.image_url" :src="publicMediaUrl(character.image_url)" :alt="''" />
+          <span v-else class="hero-avatar">{{ character.name.slice(0, 1) }}</span>
+          <span class="hero-option-copy"><strong>{{ character.name }}</strong><small>{{ character.role || '全局角色' }}</small></span>
+          <span class="hero-check" aria-hidden="true">{{ selectedCharacterId === character.id ? '✓' : '' }}</span>
+        </button>
+      </div>
+      <p v-else class="dim empty-hero">未选择全局角色时，会根据世界设定自动生成一位本局主角。</p>
+    </section>
+
     <section v-if="loading" class="world-grid">
       <div v-for="n in 3" :key="n" class="world-card skeleton-card"></div>
     </section>
@@ -21,7 +47,7 @@
         <p class="tagline">{{ world.tagline }}</p>
         <p class="premise">{{ world.premise }}</p>
         <button class="btn btn-primary" type="button" :disabled="starting" @click="enterWorld(world)">
-          进入{{ world.title }}
+          {{ starting ? '正在准备世界…' : `进入${world.title}` }}
         </button>
       </article>
     </section>
@@ -45,7 +71,9 @@
           <textarea v-model.trim="custom.premise" class="input" rows="4" maxlength="2000" placeholder="你是谁，眼前有什么麻烦，世界不许打破的规矩。" required></textarea>
         </label>
         <div class="custom-actions">
-          <button class="btn btn-primary" type="submit" :disabled="starting">开始这个世界</button>
+          <button class="btn btn-primary" type="submit" :disabled="starting">
+            {{ starting ? '正在准备世界…' : '开始这个世界' }}
+          </button>
         </div>
       </form>
     </section>
@@ -71,25 +99,29 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { rpgAPI } from '~/composables/useApi'
+import { publicMediaUrl } from '~/composables/useMedia'
 import { toastError } from '~/composables/useToast'
 
 const worlds = ref<any[]>([])
 const sessions = ref<any[]>([])
+const globalCharacters = ref<any[]>([])
+const selectedCharacterId = ref<number | null>(null)
 const loading = ref(true)
 const starting = ref(false)
 const custom = reactive({ title: '', genre: '', premise: '' })
 
 async function load() {
-  const [worldRows, sessionRows] = await Promise.all([rpgAPI.worlds(), rpgAPI.sessions()])
+  const [worldRows, sessionRows, characterRows] = await Promise.all([rpgAPI.worlds(), rpgAPI.sessions(), rpgAPI.globalCharacters()])
   worlds.value = worldRows || []
   sessions.value = sessionRows || []
+  globalCharacters.value = characterRows || []
 }
 
 async function enterWorld(world: { id: number }) {
   if (starting.value) return
   starting.value = true
   try {
-    const session = await rpgAPI.createSession({ world_id: world.id })
+    const session = await rpgAPI.createSession({ world_id: world.id, global_character_id: selectedCharacterId.value || undefined })
     await navigateTo(`/play/${session.id}`)
   } catch (error) {
     toastError(error, { fallback: '这个世界暂时进不去' })
@@ -106,6 +138,7 @@ async function enterCustom() {
       title: custom.title,
       genre: custom.genre || '原创',
       premise: custom.premise,
+      global_character_id: selectedCharacterId.value || undefined,
     })
     await navigateTo(`/play/${session.id}`)
   } catch (error) {
@@ -150,6 +183,24 @@ onMounted(async () => {
   letter-spacing: -0.03em;
 }
 .lede { max-width: 680px; color: var(--text-2); font-size: 15px; line-height: 1.7; }
+.hero-picker { display: grid; gap: 12px; padding: 15px 0 17px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.hero-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.hero-picker-head h2 { font-size: 16px; margin-bottom: 3px; }
+.hero-picker-head .dim, .empty-hero { color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.library-link { color: var(--accent-text); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.library-link:hover { text-decoration: underline; }
+.hero-options { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 3px; }
+.hero-option { width: 206px; min-width: 206px; height: 58px; display: flex; align-items: center; gap: 10px; padding: 7px; text-align: left; color: var(--text-0); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.hero-option.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg); }
+.hero-option img, .hero-avatar { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 4px; object-fit: cover; background: var(--bg-2); }
+.hero-avatar { display: grid; place-items: center; color: var(--accent-text); font-size: 18px; font-weight: 700; }
+.hero-option-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.hero-option-copy strong, .hero-option-copy small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hero-option-copy strong { font-size: 13px; }
+.hero-option-copy small { color: var(--text-3); font-size: 11px; }
+.hero-check { width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--accent-text); font-size: 11px; }
+.hero-option.selected .hero-check { border-color: var(--accent); background: var(--accent); color: white; }
+.empty-hero { padding: 0; }
 .world-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -202,6 +253,7 @@ textarea.input { resize: vertical; min-height: 96px; line-height: 1.6; padding: 
 @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 @media (max-width: 980px) {
   .world-grid, .custom-form { grid-template-columns: 1fr; }
+  .hero-picker-head { align-items: flex-start; flex-direction: column; gap: 6px; }
   .lobby-head h1 { font-size: 38px; }
 }
 </style>

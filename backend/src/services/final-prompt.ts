@@ -17,9 +17,9 @@ type SceneRow = typeof schema.scenes.$inferSelect
 type PropRow = typeof schema.props.$inferSelect
 
 /** 顶栏选择的文本模型/配置覆盖（不传则跟随 Agent 与文本配置默认） */
-export interface PromptAgentOptions { model?: string; configId?: number }
+export interface PromptAgentOptions { model?: string; configId?: number; forImageSubmission?: boolean }
 
-async function runPromptAgent(episodeId: number, dramaId: number, message: string, opts?: PromptAgentOptions) {
+async function runPromptAgent(episodeId: number, dramaId: number, message: string, opts?: PromptAgentOptions, characterImageRevision?: { id: number; revision: number; invalidateOnSave?: boolean }) {
   const agent = mastra.getAgent('prompt_generator')
   if (!agent) throw new Error('图片提示词 Agent 不可用')
   const requestContext = buildAgentRequestContext({
@@ -27,6 +27,7 @@ async function runPromptAgent(episodeId: number, dramaId: number, message: strin
     dramaId,
     modelOverride: opts?.model || undefined,
     textConfigId: opts?.configId || undefined,
+    characterImageRevision,
   })
   await agent.generate([{ role: 'user', content: message }], { maxSteps: 12, requestContext })
 }
@@ -37,7 +38,8 @@ export async function ensureCharacterFinalPrompt(char: CharacterRow, episodeId: 
   try {
     logTaskProgress('FinalPrompt', 'character-generate', { characterId: char.id, episodeId })
     await runPromptAgent(episodeId, char.dramaId,
-      `为角色「${char.name}」(character_id=${char.id}) 生成三视图最终提示词，并调用 save_character_final_prompt 保存。`, opts)
+      `为角色「${char.name}」(character_id=${char.id}) 生成三视图最终提示词，并调用 save_character_final_prompt 保存。`, opts,
+      { id: char.id, revision: char.imageRevision, invalidateOnSave: !opts?.forImageSubmission })
     const [fresh] = await db.select().from(schema.characters).where(eq(schema.characters.id, char.id))
     return fresh?.finalPrompt || ''
   } catch (err: any) {

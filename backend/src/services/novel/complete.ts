@@ -32,6 +32,7 @@ export interface NovelCompletionDependencies {
   /** 按优先级排列。当前文本通道 502/503/524 时，改用下一条。 */
   configs?: AIConfig[]
   fetchImpl?: typeof fetch
+  timeoutMs?: number
 }
 
 /** 当前通道暂时不可用时，才换下一条已启用的文本配置。鉴权失败和内容错误不换。 */
@@ -56,7 +57,7 @@ export async function completeNovelPrompt(prompt: string, deps?: NovelCompletion
   for (let index = 0; index < configs.length; index += 1) {
     const config = configs[index]
     try {
-      return await completeWithConfig(prompt, config, deps?.fetchImpl)
+      return await completeWithConfig(prompt, config, deps?.fetchImpl, deps?.timeoutMs)
     } catch (error) {
       lastError = error
       const status = unavailableStatus(error)
@@ -73,7 +74,7 @@ export async function completeNovelPrompt(prompt: string, deps?: NovelCompletion
   throw lastError instanceof Error ? lastError : new Error(EMPTY_NOVEL_RESULT)
 }
 
-async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: typeof fetch): Promise<string> {
+async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: typeof fetch, timeoutMs?: number): Promise<string> {
   const provider = config.provider.toLowerCase()
   const baseURL = getTextProviderBaseUrl(config)
   const temperature = config.temperature ?? NOVEL_TEMPERATURE
@@ -86,8 +87,8 @@ async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: 
     fetchImpl: outbound,
   })
   const call = patched || outbound
-  if (provider === 'gemini') return completeGemini(call, baseURL, config.apiKey, config.model, prompt, temperature)
-  return completeChat(call, baseURL, config.apiKey, config.model, prompt, temperature)
+  if (provider === 'gemini') return completeGemini(call, baseURL, config.apiKey, config.model, prompt, temperature, timeoutMs)
+  return completeChat(call, baseURL, config.apiKey, config.model, prompt, temperature, timeoutMs)
 }
 
 async function completeChat(
@@ -97,6 +98,7 @@ async function completeChat(
   model: string,
   prompt: string,
   temperature: number,
+  timeoutMs = NOVEL_TIMEOUT_MS,
 ): Promise<string> {
   const url = `${baseURL.replace(/\/+$/, '')}/chat/completions`
   return completeWithRetry(async () => {
@@ -115,7 +117,7 @@ async function completeChat(
         Accept: 'text/event-stream',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(NOVEL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) {
       const status = response.status
@@ -133,6 +135,7 @@ async function completeGemini(
   model: string,
   prompt: string,
   temperature: number,
+  timeoutMs = NOVEL_TIMEOUT_MS,
 ): Promise<string> {
   const root = `${baseURL.replace(/\/+$/, '')}/models/${encodeURIComponent(model)}`
   const streamUrl = `${root}:streamGenerateContent?alt=sse`
@@ -142,7 +145,7 @@ async function completeGemini(
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: { temperature, maxOutputTokens: NOVEL_MAX_TOKENS },
     })
-    const signal = AbortSignal.timeout(NOVEL_TIMEOUT_MS)
+    const signal = AbortSignal.timeout(timeoutMs)
     let response = await call(streamUrl, {
       method: 'POST',
       headers: {

@@ -19,7 +19,11 @@
           <BookOpen :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.play') }}</span>
         </NuxtLink>
-        <NuxtLink to="/studio" class="nav-link" :class="{ active: route.path === '/studio' || route.path.startsWith('/drama') }">
+          <NuxtLink to="/characters" class="nav-link" :class="{ active: route.path === '/characters' }">
+            <UsersRound :size="15" :stroke-width="1.8" />
+            <span>{{ t('layout.nav.characters') }}</span>
+          </NuxtLink>
+          <NuxtLink to="/studio" class="nav-link" :class="{ active: route.path === '/studio' || route.path.startsWith('/drama') }">
           <LayoutGrid :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.studio') }}</span>
         </NuxtLink>
@@ -59,7 +63,7 @@
 </template>
 
 <script setup>
-import { BookOpen, Github, LayoutGrid, Settings, TriangleAlert } from 'lucide-vue-next'
+import { BookOpen, Github, LayoutGrid, Settings, TriangleAlert, UsersRound } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { aiConfigAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/brand-logo.png'
