@@ -60,6 +60,126 @@ test('existing SQLite character rows receive an image revision', () => {
   }
 })
 
+test('existing global character rows receive life profile columns', () => {
+  const sqlite = new Database(':memory:')
+  try {
+    sqlite.exec(`CREATE TABLE global_characters (
+      id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    ); INSERT INTO global_characters (id, name, created_at, updated_at) VALUES (1, 'old', 't', 't')`)
+    initSqliteSchema(sqlite)
+    assert.deepEqual(sqlite.prepare(`SELECT default_values, default_speech, default_habits, default_desires,
+      default_fears, default_relationships, default_abilities, default_background
+      FROM global_characters WHERE id = 1`).get(), {
+      default_values: null,
+      default_speech: null,
+      default_habits: null,
+      default_desires: null,
+      default_fears: null,
+      default_relationships: null,
+      default_abilities: null,
+      default_background: null,
+    })
+  } finally {
+    sqlite.close()
+  }
+})
+
+test('global character life defaults round-trip through the library API', async () => {
+  const headers = { 'content-type': 'application/json' }
+  const longValue = '值'.repeat(2001)
+  const created = await globalCharacterRoutes.request('/', { method: 'POST', headers, body: JSON.stringify({
+    name: '沈知遥', role: '钟表匠', appearance: '银灰色短发', physique: longValue,
+    default_personality: '克制', default_values: '把真相说完', default_speech: '先问再判断',
+    default_habits: '随身带笔记', default_desires: '找到委托人', default_fears: '看漏裂痕',
+    default_relationships: '记挂老钟表匠', default_abilities: '修理钟表', default_background: longValue,
+    default_styling: '深绿短外套',
+  }) })
+  assert.equal(created.status, 201)
+  const createdBody = (await created.json() as any).data
+  const id = createdBody.id
+  assert.equal(createdBody.physique.length, 2000)
+  assert.equal(createdBody.default_background.length, 2000)
+  const updated = await globalCharacterRoutes.request(`/${id}`, { method: 'PUT', headers, body: JSON.stringify({
+    default_values: longValue,
+  }) })
+  assert.equal(updated.status, 200)
+  const body = await updated.json() as any
+  assert.equal(body.data.default_values.length, 2000)
+  assert.equal(body.data.default_relationships, '记挂老钟表匠')
+  assert.equal(body.data.appearance, '银灰色短发')
+})
+
+test('player life edits do not replace the portrait', async () => {
+  const session = await createSession({ title: '生活细节不换脸', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。' })
+  assert.ok(session?.player_character)
+  const id = session.player_character.project_character_id
+  await db.update(schema.characters).set({ imageUrl: '/static/face.png', localPath: '/static/face.png', imageAuto: true, imageRevision: 3 })
+    .where(eq(schema.characters.id, id))
+  await updateSessionPlayerCharacter(session.id, { personality: '更温和', values: '守信' })
+  let [character] = await db.select().from(schema.characters).where(eq(schema.characters.id, id))
+  assert.equal(character.imageUrl, '/static/face.png')
+  assert.equal(character.imageRevision, 3)
+  assert.equal((await getSession(session.id))?.player_character?.values, '守信')
+  await updateSessionPlayerCharacter(session.id, { styling: '新斗篷' })
+  ;[character] = await db.select().from(schema.characters).where(eq(schema.characters.id, id))
+  assert.equal(character.imageUrl, null)
+  assert.equal(character.imageRevision, 4)
+})
+
+test('opening adaptation keeps the portrait when clothing does not change', async () => {
+  const headers = { 'content-type': 'application/json' }
+  const created = await globalCharacterRoutes.request('/', { method: 'POST', headers, body: JSON.stringify({
+    name: '林雾', role: '医生', appearance: '短发', physique: '清瘦', default_styling: '深色风衣',
+    default_personality: '先听后判断', default_values: '先救人', default_speech: '短句，不催问',
+    default_habits: '进门先看窗', default_desires: '找到老师', default_fears: '再次迟到',
+    default_relationships: '记挂老师和邻居孩子', default_abilities: '外伤处理', default_background: '在边境诊所长大',
+  }) })
+  const global = (await created.json() as any).data
+  const session = await createSession({ title: '服装未变', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id })
+  assert.ok(session?.player_character)
+  const id = session.player_character.project_character_id
+  await db.update(schema.characters).set({ imageUrl: '/static/face.png', localPath: '/static/face.png', imageAuto: true, imageRevision: 2 })
+    .where(eq(schema.characters.id, id))
+  await assert.rejects(narrateSession(session.id, { mode: 'opening' }, () => {}), /未配置文本模型/)
+  const [character] = await db.select().from(schema.characters).where(eq(schema.characters.id, id))
+  assert.equal(character.imageUrl, '/static/face.png')
+  assert.equal(character.imageRevision, 2)
+  const player = (await getSession(session.id))?.player_character
+  assert.equal(player?.values, '先救人')
+  assert.equal(player?.personality, '先听后判断')
+  assert.equal(player?.speech, '短句，不催问')
+  assert.equal(player?.habits, '进门先看窗')
+  assert.equal(player?.desires, '找到老师')
+  assert.equal(player?.fears, '再次迟到')
+  assert.equal(player?.relationships, '记挂老师和邻居孩子')
+  assert.equal(player?.abilities, '外伤处理')
+  assert.equal(player?.background, '在边境诊所长大')
+  assert.equal(player?.appearance, '短发')
+  assert.equal(player?.physique, '清瘦')
+  assert.equal(player?.adapted, true)
+})
+
+test('opening adaptation replaces an automatic portrait when fallback clothing changes', async () => {
+  const headers = { 'content-type': 'application/json' }
+  const created = await globalCharacterRoutes.request('/', { method: 'POST', headers, body: JSON.stringify({
+    name: '林雾改衣', default_styling: '深色风衣', appearance: '短发', physique: '清瘦',
+  }) })
+  const global = (await created.json() as any).data
+  const session = await createSession({ title: '服装改变', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id })
+  assert.ok(session?.player_character)
+  const id = session.player_character.project_character_id
+  const snapshot = { ...session.player_character, styling: '旧衣服' }
+  await db.update(schema.rpgSessions).set({ playerCharacter: JSON.stringify(snapshot) }).where(eq(schema.rpgSessions.id, session.id))
+  await db.update(schema.characters).set({ styling: '旧衣服', imageUrl: '/static/auto.png', localPath: '/static/auto.png', imageAuto: true, imageRevision: 1 })
+    .where(eq(schema.characters.id, id))
+  await assert.rejects(narrateSession(session.id, { mode: 'opening' }, () => {}), /未配置文本模型/)
+  const [character] = await db.select().from(schema.characters).where(eq(schema.characters.id, id))
+  assert.equal(character.styling, '深色风衣')
+  assert.equal(character.imageUrl, null)
+  assert.equal(character.imageRevision, 2)
+  assert.equal(character.appearance, '短发')
+})
+
 test('startup repairs deleted global links and previously deleted RPG players', () => {
   const sqlite = new Database(':memory:')
   try {
