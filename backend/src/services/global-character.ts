@@ -7,6 +7,14 @@ export interface GlobalCharacterDraft {
   appearance: string
   physique: string
   default_personality: string
+  default_values: string
+  default_speech: string
+  default_habits: string
+  default_desires: string
+  default_fears: string
+  default_relationships: string
+  default_abilities: string
+  default_background: string
   default_styling: string
   image_url: null
 }
@@ -17,6 +25,13 @@ export interface WorldPlayerCharacterDraft {
   appearance: string
   physique: string
   personality: string
+  values: string
+  speech: string
+  habits: string
+  desires: string
+  fears: string
+  relationships: string
+  abilities: string
   background: string
   styling: string
 }
@@ -28,17 +43,25 @@ export async function generateGlobalCharacterDraft(
   const brief = typeof concept === 'string' ? concept.trim().slice(0, 2000) : ''
   if (!brief) throw new Error('请先写下角色构想')
   const raw = await complete([
-    '根据角色构想，设计一个可在不同世界复用的全局角色。姓名、身份、脸部外貌和身材是稳定特征；性格与服装是默认值，后续会按世界调整。',
+    '根据角色构想，设计一个可在不同世界复用的人。固定外貌和固定身材跨世界保持原样。姓名、身份、性格、价值观、说话方式、习惯、愿望、恐惧、在乎的人、能力、经历和服装是默认值，进入每个世界后会改写。',
     `角色构想：${brief}`,
-    '返回 JSON 对象，字段为 name、role、appearance、physique、default_personality、default_styling，值均为简体中文字符串。不要返回 Markdown。',
+    '返回 JSON 对象，字段为 name、role、appearance、physique、default_personality、default_values、default_speech、default_habits、default_desires、default_fears、default_relationships、default_abilities、default_background、default_styling，值均为简体中文字符串。不要返回 Markdown。',
   ].join('\n\n'), { timeoutMs: 45_000 })
   const fields = parseModelJson(raw)
   const draft = {
     name: textField(fields.name, 80),
     role: textField(fields.role, 120),
     appearance: textField(fields.appearance, 2000),
-    physique: textField(fields.physique, 1200),
+    physique: textField(fields.physique, 2000),
     default_personality: textField(fields.default_personality, 2000),
+    default_values: textField(fields.default_values, 2000),
+    default_speech: textField(fields.default_speech, 2000),
+    default_habits: textField(fields.default_habits, 2000),
+    default_desires: textField(fields.default_desires, 2000),
+    default_fears: textField(fields.default_fears, 2000),
+    default_relationships: textField(fields.default_relationships, 2000),
+    default_abilities: textField(fields.default_abilities, 2000),
+    default_background: textField(fields.default_background, 2000),
     default_styling: textField(fields.default_styling, 2000),
     image_url: null,
   }
@@ -55,15 +78,22 @@ export async function generateWorldPlayerCharacterDraft(
     `世界名称：${world.title}`,
     `世界类型：${world.genre || '原创'}`,
     `世界设定：${world.premise.slice(0, 2000)}`,
-    '返回 JSON 对象，字段为 name、role、appearance、physique、personality、background、styling，值均为简体中文字符串。姓名应具体自然；外貌、身材、性格、经历和服装都要简洁具体。不要返回 Markdown。',
+    '返回 JSON 对象，字段为 name、role、appearance、physique、personality、values、speech、habits、desires、fears、relationships、abilities、background、styling，值均为简体中文字符串。姓名应具体自然；外貌、身材、性格、经历和服装都要简洁具体。不要返回 Markdown。',
   ].join('\n\n'), { timeoutMs: 45_000 })
   const fields = parseModelJson(raw)
   const draft = {
     name: textField(fields.name, 80),
     role: textField(fields.role, 120),
     appearance: textField(fields.appearance, 2000),
-    physique: textField(fields.physique, 1200),
+    physique: textField(fields.physique, 2000),
     personality: textField(fields.personality, 2000),
+    values: textField(fields.values, 2000),
+    speech: textField(fields.speech, 2000),
+    habits: textField(fields.habits, 2000),
+    desires: textField(fields.desires, 2000),
+    fears: textField(fields.fears, 2000),
+    relationships: textField(fields.relationships, 2000),
+    abilities: textField(fields.abilities, 2000),
     background: textField(fields.background, 2000),
     styling: textField(fields.styling, 2000),
   }
@@ -82,6 +112,13 @@ export function fallbackWorldPlayerCharacterDraft(
     appearance: '尚未设定，可在本局主角编辑中补充。',
     physique: '',
     personality: '性格会随着你的选择逐渐显现。',
+    values: '',
+    speech: '',
+    habits: '',
+    desires: '',
+    fears: '',
+    relationships: '',
+    abilities: '',
     background: world.premise.slice(0, 2000),
     styling: `符合${world.genre || '当前世界'}设定的日常装束。`,
   }

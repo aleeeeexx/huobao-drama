@@ -80,6 +80,14 @@ export const sqliteSchemaStatements = [
     appearance TEXT,
     physique TEXT,
     default_personality TEXT,
+    default_values TEXT,
+    default_speech TEXT,
+    default_habits TEXT,
+    default_desires TEXT,
+    default_fears TEXT,
+    default_relationships TEXT,
+    default_abilities TEXT,
+    default_background TEXT,
     default_styling TEXT,
     image_url TEXT,
     reference_images TEXT,
@@ -460,6 +468,30 @@ const REMOVE_SQL = 'DELETE FROM style_presets WHERE "value" = ? AND "prompt" = ?
 export function initSqliteSchema(sqlite: Database.Database) {
   for (const statement of sqliteSchemaStatements) {
     sqlite.exec(statement)
+  }
+  const globalCharacterColumns = new Set((sqlite.prepare('PRAGMA table_info(global_characters)').all() as { name: string }[]).map(c => c.name))
+  for (const [name, type] of Object.entries({
+    role: 'TEXT',
+    appearance: 'TEXT',
+    physique: 'TEXT',
+    default_personality: 'TEXT',
+    default_values: 'TEXT',
+    default_speech: 'TEXT',
+    default_habits: 'TEXT',
+    default_desires: 'TEXT',
+    default_fears: 'TEXT',
+    default_relationships: 'TEXT',
+    default_abilities: 'TEXT',
+    default_background: 'TEXT',
+    default_styling: 'TEXT',
+    image_url: 'TEXT',
+    reference_images: 'TEXT',
+    deleted_at: 'TEXT',
+  })) {
+    if (!globalCharacterColumns.has(name)) {
+      sqlite.exec(`ALTER TABLE global_characters ADD COLUMN ${name} ${type}`)
+      globalCharacterColumns.add(name)
+    }
   }
   // 兼容已安装的桌面版；仅增加任务恢复元数据，不改写历史生成结果。
   const taskColumns = new Set((sqlite.prepare('PRAGMA table_info(sys_task)').all() as { name: string }[]).map(c => c.name))

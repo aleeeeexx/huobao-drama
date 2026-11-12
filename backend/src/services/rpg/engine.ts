@@ -69,9 +69,13 @@ import {
   type RpgWorldState,
 } from './turn.js'
 import {
+  PLAYER_PROFILE_FIELDS,
   adaptPlayerCharacter as adaptPlayerCharacterResponse,
   fallbackPlayerCharacter,
   normalizePlayerCharacterField,
+  normalizeStoredPlayerCharacter,
+  playerProfileFromDefaults,
+  portraitFieldsChanged,
   withPlayerCharacterGuidance,
   type PlayerCharacterSnapshot,
 } from './player-character.js'
@@ -129,6 +133,21 @@ function createGlobalPlayerCharacter(
   dramaId: number,
   episodeId: number,
 ): PlayerCharacterSnapshot {
+  const defaults = {
+    name: globalCharacter.name || '',
+    role: globalCharacter.role || '主角',
+    personality: globalCharacter.defaultPersonality || '',
+    values: globalCharacter.defaultValues || '',
+    speech: globalCharacter.defaultSpeech || '',
+    habits: globalCharacter.defaultHabits || '',
+    desires: globalCharacter.defaultDesires || '',
+    fears: globalCharacter.defaultFears || '',
+    relationships: globalCharacter.defaultRelationships || '',
+    abilities: globalCharacter.defaultAbilities || '',
+    background: globalCharacter.defaultBackground || '',
+    styling: globalCharacter.defaultStyling || '',
+  }
+  const profile = playerProfileFromDefaults(defaults)
   return db.transaction((tx) => {
     const current = tx.select().from(schema.globalCharacters).where(eq(schema.globalCharacters.id, globalCharacter.id)).get()
     const globalId = current && !current.deletedAt ? globalCharacter.id : null
@@ -137,13 +156,14 @@ function createGlobalPlayerCharacter(
       dramaId,
       globalCharacterId: globalId,
       manualOverride: !globalId,
-      name: globalCharacter.name,
-      role: globalCharacter.role || '主角',
+      name: profile.name,
+      role: profile.role,
       description: globalCharacter.appearance || '',
       appearance: globalCharacter.appearance || '',
       physique: globalCharacter.physique || '',
-      styling: globalCharacter.defaultStyling || '',
-      personality: globalCharacter.defaultPersonality || '',
+      styling: profile.styling,
+      personality: profile.personality,
+      background: profile.background,
       finalPrompt: null,
       imageUrl: globalCharacter.imageUrl || null,
       referenceImages: snapshotCharacterReferences(globalCharacter.imageUrl, globalCharacter.referenceImages),
@@ -155,15 +175,9 @@ function createGlobalPlayerCharacter(
     return {
       global_character_id: globalId,
       project_character_id: projectCharacterId,
-      name: globalCharacter.name,
-      role: globalCharacter.role || '主角',
+      ...profile,
       appearance: globalCharacter.appearance || '',
       physique: globalCharacter.physique || '',
-      default_personality: globalCharacter.defaultPersonality || '',
-      default_styling: globalCharacter.defaultStyling || '',
-      personality: globalCharacter.defaultPersonality || '',
-      background: '',
-      styling: globalCharacter.defaultStyling || '',
       image_url: globalCharacter.imageUrl || '',
       adapted: false,
     }
@@ -182,19 +196,33 @@ async function createWorldPlayerCharacter(
     console.error('[rpg] default-player-character', error instanceof Error ? error.message : error)
     draft = fallbackWorldPlayerCharacterDraft(world)
   }
+  const profile = playerProfileFromDefaults({
+    name: draft.name,
+    role: draft.role || '主角',
+    personality: draft.personality,
+    values: draft.values,
+    speech: draft.speech,
+    habits: draft.habits,
+    desires: draft.desires,
+    fears: draft.fears,
+    relationships: draft.relationships,
+    abilities: draft.abilities,
+    background: draft.background,
+    styling: draft.styling,
+  })
   const ts = now()
   const characterRes = await db.insert(schema.characters).values({
     dramaId,
     globalCharacterId: null,
     manualOverride: true,
-    name: draft.name,
-    role: draft.role || '主角',
+    name: profile.name,
+    role: profile.role,
     description: draft.appearance,
     appearance: draft.appearance,
     physique: draft.physique,
-    background: draft.background,
-    styling: draft.styling,
-    personality: draft.personality,
+    background: profile.background,
+    styling: profile.styling,
+    personality: profile.personality,
     finalPrompt: null,
     imageUrl: null,
     referenceImages: null,
@@ -206,15 +234,9 @@ async function createWorldPlayerCharacter(
   return {
     global_character_id: null,
     project_character_id: projectCharacterId,
-    name: draft.name,
-    role: draft.role || '主角',
+    ...profile,
     appearance: draft.appearance,
     physique: draft.physique,
-    default_personality: draft.personality,
-    default_styling: draft.styling,
-    personality: draft.personality,
-    background: draft.background,
-    styling: draft.styling,
     image_url: '',
     adapted: true,
   }
@@ -299,7 +321,8 @@ export async function getSession(sessionId: number) {
   const refreshed = []
   for (const turn of turns) refreshed.push(await refreshTurnMedia(turn))
   const assets = await loadEpisodeAssets(session.dramaId, session.episodeId)
-  const playerCharacter = parseJson<PlayerCharacterSnapshot | null>(session.playerCharacter, null)
+  const storedPlayerCharacter = parseJson<PlayerCharacterSnapshot | null>(session.playerCharacter, null)
+  const playerCharacter = storedPlayerCharacter ? normalizeStoredPlayerCharacter(storedPlayerCharacter) : null
   const playerAsset = playerCharacter
     ? assets.characters.find(character => character.id === playerCharacter.project_character_id)
     : null
@@ -329,14 +352,21 @@ export async function getSession(sessionId: number) {
 export async function updateSessionPlayerCharacter(sessionId: number, input: {
   global_character_id?: unknown
   generate_default?: unknown
-  personality?: unknown
-  background?: unknown
-  styling?: unknown
-  name?: unknown
-  role?: unknown
   appearance?: unknown
   physique?: unknown
   description?: unknown
+  name?: unknown
+  role?: unknown
+  personality?: unknown
+  values?: unknown
+  speech?: unknown
+  habits?: unknown
+  desires?: unknown
+  fears?: unknown
+  relationships?: unknown
+  abilities?: unknown
+  background?: unknown
+  styling?: unknown
 }) {
   if (actingSessions.has(sessionId)) throw new Error('这一幕还在书写，请稍候再编辑角色')
   actingSessions.add(sessionId)
@@ -362,25 +392,24 @@ export async function updateSessionPlayerCharacter(sessionId: number, input: {
       characterChanged = true
     } else {
       if (input.global_character_id !== undefined) throw new Error('本局已经绑定主角')
-      const current = loaded.playerCharacter
+      const current = normalizeStoredPlayerCharacter(loaded.playerCharacter)
       const [projectCharacter] = await db.select().from(schema.characters).where(eq(schema.characters.id, current.project_character_id))
       if (!projectCharacter) throw new Error('本局主角不存在')
-      next = {
+      next = normalizeStoredPlayerCharacter({
         ...current,
-        name: normalizePlayerCharacterField(input.name, current.name),
-        role: normalizePlayerCharacterField(input.role, current.role),
+        ...Object.fromEntries(PLAYER_PROFILE_FIELDS.map(field => [field.world,
+          normalizePlayerCharacterField(input[field.world], current[field.world])])),
         appearance: normalizePlayerCharacterField(input.appearance, current.appearance),
         physique: normalizePlayerCharacterField(input.physique, current.physique),
-        personality: normalizePlayerCharacterField(input.personality, current.personality),
-        background: normalizePlayerCharacterField(input.background, current.background),
-        styling: normalizePlayerCharacterField(input.styling, current.styling),
-        adapted: current.adapted,
-      }
+      })
+      const portraitChanged = portraitFieldsChanged({
+        appearance: projectCharacter.appearance || '',
+        physique: projectCharacter.physique || '',
+        styling: projectCharacter.styling || '',
+      }, next)
       const description = typeof input.description === 'string' ? input.description : projectCharacter.description
-      const changed = next.name !== projectCharacter.name || next.role !== (projectCharacter.role || '')
-        || next.appearance !== (projectCharacter.appearance || '') || next.physique !== (projectCharacter.physique || '')
-        || next.personality !== (projectCharacter.personality || '') || next.background !== (projectCharacter.background || '')
-        || next.styling !== (projectCharacter.styling || '') || (description || '') !== (projectCharacter.description || '')
+      const changed = portraitChanged || PLAYER_PROFILE_FIELDS.some(field => next[field.world] !== (current[field.world] || ''))
+        || (typeof input.description === 'string' && input.description !== (projectCharacter.description || ''))
       if (changed) next.adapted = true
       characterChanged = changed
       if (changed) prepareUncommittedOpeningForCharacterChange(loaded)
@@ -394,7 +423,7 @@ export async function updateSessionPlayerCharacter(sessionId: number, input: {
         background: next.background,
         styling: next.styling,
         manualOverride: true,
-        ...(changed ? {
+        ...(portraitChanged ? {
           referenceImages: snapshotCharacterReferences(projectCharacter.imageUrl || projectCharacter.localPath, projectCharacter.referenceImages),
           finalPrompt: sql`CASE WHEN ${schema.characters.finalPromptAuto} = 1 THEN NULL ELSE ${schema.characters.finalPrompt} END`,
           imageUrl: null,
@@ -728,22 +757,31 @@ async function writeNovelChapter(loaded: PlayContext, turnIndex: number, actionL
 }
 
 async function adaptPlayerCharacter(loaded: PlayContext) {
-  const character = loaded.playerCharacter
-  if (!character) return
+  if (!loaded.playerCharacter) return
+  const character = normalizeStoredPlayerCharacter(loaded.playerCharacter)
+  loaded.playerCharacter = character
   let adapted = fallbackPlayerCharacter(character)
   try {
     const answer = await completeNovelPrompt([
-      '请把一个全局角色改编为当前世界中的主角版本。只改性格表达、背景经历和服装，不改变姓名、身份核心、脸部外貌和身材。',
+      '请把一个全局角色改编为当前世界中的主角版本。只改写姓名、身份、性格、价值观、说话方式、习惯、愿望、恐惧、在乎的人、能力、经历和服装。脸部外貌和身材必须保持原文，不要改写。',
       `世界名称：${loaded.world.title}`,
       `世界类型：${loaded.world.genre || '原创'}`,
       `世界设定：${loaded.world.premise}`,
-      `角色姓名：${character.name}`,
-      `角色身份：${character.role}`,
+      `默认姓名：${character.default_name}`,
+      `默认身份：${character.default_role}`,
       `固定外貌：${character.appearance}`,
       `固定身材：${character.physique}`,
       `默认性格：${character.default_personality}`,
+      `默认价值观：${character.default_values}`,
+      `默认说话方式：${character.default_speech}`,
+      `默认习惯：${character.default_habits}`,
+      `默认愿望：${character.default_desires}`,
+      `默认恐惧：${character.default_fears}`,
+      `默认在乎的人：${character.default_relationships}`,
+      `默认能力：${character.default_abilities}`,
+      `默认经历：${character.default_background}`,
       `默认服装：${character.default_styling}`,
-      '返回 JSON 对象，字段为 personality、background、styling，值均为简体中文字符串。不要返回 Markdown。',
+      '返回 JSON 对象，字段为 name、role、personality、values、speech、habits、desires、fears、relationships、abilities、background、styling，值均为简体中文字符串。不要返回 Markdown。',
     ].join('\n\n'), { timeoutMs: 45_000 })
     adapted = adaptPlayerCharacterResponse(character, answer)
   } catch (error) {
@@ -758,13 +796,15 @@ async function adaptPlayerCharacter(loaded: PlayContext) {
     updatedAt: ts,
   }).where(eq(schema.rpgSessions.id, loaded.session.id))
   await db.update(schema.characters).set({
+    name: adapted.name,
+    role: adapted.role,
     personality: adapted.personality,
     background: adapted.background,
     styling: adapted.styling,
     finalPrompt: sql`CASE WHEN ${schema.characters.finalPromptAuto} = 1 AND COALESCE(${schema.characters.styling}, '') <> ${adapted.styling} THEN NULL ELSE ${schema.characters.finalPrompt} END`,
     imageUrl: sql`CASE WHEN ${schema.characters.imageAuto} = 1 AND COALESCE(${schema.characters.styling}, '') <> ${adapted.styling} THEN NULL ELSE ${schema.characters.imageUrl} END`,
     localPath: sql`CASE WHEN ${schema.characters.imageAuto} = 1 AND COALESCE(${schema.characters.styling}, '') <> ${adapted.styling} THEN NULL ELSE ${schema.characters.localPath} END`,
-    imageRevision: sql`${schema.characters.imageRevision} + 1`,
+    imageRevision: sql`CASE WHEN ${schema.characters.imageAuto} = 1 AND COALESCE(${schema.characters.styling}, '') <> ${adapted.styling} THEN ${schema.characters.imageRevision} + 1 ELSE ${schema.characters.imageRevision} END`,
     updatedAt: ts,
   }).where(eq(schema.characters.id, character.project_character_id))
   scheduleEpisodeAssetImages(loaded.session.dramaId, loaded.session.episodeId)
@@ -1081,7 +1121,8 @@ async function loadPlay(sessionId: number): Promise<PlayContext> {
     .where(eq(schema.rpgTurns.sessionId, sessionId))
     .orderBy(asc(schema.rpgTurns.turnIndex))
   const latest = turns[turns.length - 1]
-  const playerCharacter = parseJson<PlayerCharacterSnapshot | null>(session.playerCharacter, null)
+  const storedPlayerCharacter = parseJson<PlayerCharacterSnapshot | null>(session.playerCharacter, null)
+  const playerCharacter = storedPlayerCharacter ? normalizeStoredPlayerCharacter(storedPlayerCharacter) : null
   const novel = readNovelProject(session.novelState, world)
   if (playerCharacter) novel.userGuidance = withPlayerCharacterGuidance(novel.userGuidance, playerCharacter)
   return {

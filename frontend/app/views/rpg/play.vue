@@ -18,9 +18,11 @@
             <span>{{ session.player_character.role }}</span>
           </div>
         </div>
-        <p v-if="session.player_character.personality" class="character-note"><b>性格</b>{{ session.player_character.personality }}</p>
-        <p v-if="session.player_character.background" class="character-note"><b>经历</b>{{ session.player_character.background }}</p>
-        <p v-if="session.player_character.styling" class="character-note"><b>服装</b>{{ session.player_character.styling }}</p>
+        <p v-if="session.player_character.appearance" class="character-note"><b><span>固定外貌<span class="change-tag">跨世界不变</span></span></b>{{ session.player_character.appearance }}</p>
+        <p v-if="session.player_character.physique" class="character-note"><b><span>固定身材<span class="change-tag">跨世界不变</span></span></b>{{ session.player_character.physique }}</p>
+        <template v-for="field in playerCharacterSummaryFields" :key="field.key">
+          <p v-if="session.player_character[field.key]" class="character-note"><b>{{ field.label }}</b>{{ session.player_character[field.key] }}</p>
+        </template>
       </section>
       <section v-else class="block player-character-block">
         <h2>本局主角</h2>
@@ -252,12 +254,23 @@
             <button class="btn btn-ghost btn-icon" type="button" aria-label="关闭" @click="characterEditorOpen = false">×</button>
           </header>
           <div class="dialog-body character-editor-fields">
+            <label class="field"><span>本世界姓名</span><input v-model="playerCharacterDraft.name" class="input" maxlength="80" /></label>
+            <label class="field"><span>本世界身份</span><input v-model="playerCharacterDraft.role" class="input" maxlength="120" /></label>
+            <label class="field"><span>固定外貌<span class="change-tag">跨世界不变</span></span><textarea v-model="playerCharacterDraft.appearance" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>固定身材<span class="change-tag">跨世界不变</span></span><textarea v-model="playerCharacterDraft.physique" class="textarea" rows="2" maxlength="4000" /></label>
             <label class="field"><span>本世界性格</span><textarea v-model="playerCharacterDraft.personality" class="textarea" rows="3" maxlength="4000" /></label>
-            <label class="field"><span>本世界背景经历</span><textarea v-model="playerCharacterDraft.background" class="textarea" rows="4" maxlength="4000" /></label>
+            <label class="field"><span>本世界价值观</span><textarea v-model="playerCharacterDraft.values" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界说话方式</span><textarea v-model="playerCharacterDraft.speech" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界习惯</span><textarea v-model="playerCharacterDraft.habits" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界愿望</span><textarea v-model="playerCharacterDraft.desires" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界恐惧</span><textarea v-model="playerCharacterDraft.fears" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界在乎的人</span><textarea v-model="playerCharacterDraft.relationships" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界能力</span><textarea v-model="playerCharacterDraft.abilities" class="textarea" rows="3" maxlength="4000" /></label>
+            <label class="field"><span>本世界经历</span><textarea v-model="playerCharacterDraft.background" class="textarea" rows="4" maxlength="4000" /></label>
             <label class="field"><span>本世界服装与妆造</span><textarea v-model="playerCharacterDraft.styling" class="textarea" rows="3" maxlength="4000" /></label>
           </div>
           <footer class="dialog-foot">
-            <span class="dim">修改会用于后续章节，并重新生成角色定妆图。</span>
+            <span class="dim">修改会用于后续章节。修改外貌、身材或服装会重新生成角色定妆图。</span>
             <button class="btn btn-primary" type="button" :disabled="savingPlayerCharacter" @click="savePlayerCharacter">
               <Loader2 v-if="savingPlayerCharacter" :size="13" class="spin" />
               {{ savingPlayerCharacter ? '保存中' : '保存本局设定' }}
@@ -371,7 +384,22 @@ const generatingPlayerCharacter = ref(false)
 const savingStoryCharacter = ref(false)
 const selectingCharacter = ref(false)
 const selectingCharacterId = ref<number | null>(null)
-const playerCharacterDraft = ref({ personality: '', background: '', styling: '' })
+const playerCharacterSummaryFields = [
+  { key: 'personality', label: '本世界性格' },
+  { key: 'values', label: '本世界价值观' },
+  { key: 'speech', label: '本世界说话方式' },
+  { key: 'habits', label: '本世界习惯' },
+  { key: 'desires', label: '本世界愿望' },
+  { key: 'fears', label: '本世界恐惧' },
+  { key: 'relationships', label: '本世界在乎的人' },
+  { key: 'abilities', label: '本世界能力' },
+  { key: 'background', label: '本世界经历' },
+  { key: 'styling', label: '本世界服装与妆造' },
+] as const
+const playerCharacterDraft = ref({
+  name: '', role: '', appearance: '', physique: '', personality: '', values: '', speech: '', habits: '',
+  desires: '', fears: '', relationships: '', abilities: '', background: '', styling: '',
+})
 const editingStoryCharacter = ref<any>(null)
 const storyCharacterDraft = ref({ role: '', description: '', appearance: '', physique: '', personality: '', background: '', styling: '' })
 const globalCharacters = ref<any[]>([])
@@ -516,7 +544,18 @@ function openCharacterEditor() {
   const character = session.value?.player_character
   if (!character) return
   playerCharacterDraft.value = {
+    name: character.name || '',
+    role: character.role || '',
+    appearance: character.appearance || '',
+    physique: character.physique || '',
     personality: character.personality || '',
+    values: character.values || '',
+    speech: character.speech || '',
+    habits: character.habits || '',
+    desires: character.desires || '',
+    fears: character.fears || '',
+    relationships: character.relationships || '',
+    abilities: character.abilities || '',
     background: character.background || '',
     styling: character.styling || '',
   }
@@ -986,12 +1025,14 @@ onBeforeUnmount(() => {
 .player-character-summary span { color: var(--text-2); font-size: 12px; }
 .character-note { margin-top: 6px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
 .character-note b { margin-right: 6px; color: var(--text-3); font-weight: 600; }
+.change-tag { margin-left: 6px; color: var(--text-3); font-size: 10px; font-weight: 400; white-space: nowrap; }
 .character-editor-dialog { width: min(600px, calc(100vw - 32px)); max-height: min(86vh, 760px); overflow: auto; }
 .character-editor-fields { display: grid; gap: 14px; }
 .character-editor-fields .field { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 600; }
-.character-editor-fields textarea { width: 100%; resize: vertical; color: var(--text-0); font: inherit; font-weight: 400; font-size: 13px; }
-.character-editor-dialog .dialog-foot { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.character-editor-fields textarea, .character-editor-fields input { width: 100%; resize: vertical; color: var(--text-0); font: inherit; font-weight: 400; font-size: 13px; }
+.character-editor-dialog .dialog-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; }
 .character-editor-dialog .dialog-foot .dim { font-size: 11px; }
+.character-editor-dialog .dialog-foot > .dim { flex: 1 1 260px; }
 .character-editor-dialog .dialog-foot .btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .story-character-global-action { min-width: 0; }
 .story-character-saved { color: var(--success); font-size: 12px; }

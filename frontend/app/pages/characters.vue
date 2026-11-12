@@ -4,7 +4,7 @@
       <div>
         <p class="eyebrow">幻书 · 角色资料</p>
         <h1>全局角色库</h1>
-        <p class="lede">保存稳定身份与默认设定。进入不同世界时，本局性格、经历和服装会单独适配。</p>
+        <p class="lede">保存这个人的固定外貌、身材，以及进入不同世界后会改写的默认生活。</p>
       </div>
       <button class="btn btn-primary" type="button" :disabled="saving || generating" @click="startNew">
         <Plus :size="15" /> 新建角色
@@ -59,36 +59,40 @@
           </button>
         </div>
 
-        <div class="editor-grid">
-          <label class="field">
-            <span>姓名</span>
-            <input v-model.trim="draft.name" class="input" maxlength="80" required placeholder="角色姓名" />
-          </label>
-          <label class="field">
-            <span>默认身份</span>
-            <input v-model.trim="draft.role" class="input" maxlength="120" placeholder="例如：调查记者" />
-          </label>
-          <label class="field field-wide">
-            <span>固定外貌</span>
-            <textarea v-model.trim="draft.appearance" class="input" rows="3" maxlength="2000" placeholder="年龄感、五官、发色、辨识度等稳定特征" />
-          </label>
-          <label class="field field-wide">
-            <span>固定身材与体态</span>
-            <textarea v-model.trim="draft.physique" class="input" rows="2" maxlength="1200" placeholder="身高、体型、体态等不随世界变化的特征" />
-          </label>
-          <label class="field field-wide">
-            <span>默认性格</span>
-            <textarea v-model.trim="draft.default_personality" class="input" rows="3" maxlength="2000" placeholder="角色通常的性格、处事方式和价值观" />
-          </label>
-          <label class="field field-wide">
-            <span>默认服装与妆造</span>
-            <textarea v-model.trim="draft.default_styling" class="input" rows="3" maxlength="2000" placeholder="作为跨世界适配起点的发型、服装和配饰" />
-          </label>
-          <label class="field field-wide">
-            <span>参考形象地址</span>
-            <input v-model.trim="draft.image_url" class="input" type="text" placeholder="https://… 或 /static/…" />
-          </label>
-        </div>
+        <section class="profile-group">
+          <div>
+            <h3>跨世界不变</h3>
+            <p class="field-note">脸、身材和参考形象进入任何世界都保持原样。</p>
+          </div>
+          <div class="editor-grid">
+            <label class="field field-wide">
+              <span>固定外貌</span>
+              <textarea v-model.trim="draft.appearance" class="input" rows="3" maxlength="2000" placeholder="年龄感、五官、发色、辨识度等稳定特征" />
+            </label>
+            <label class="field field-wide">
+              <span>固定身材与体态</span>
+              <textarea v-model.trim="draft.physique" class="input" rows="2" maxlength="2000" placeholder="身高、体型、体态等不随世界变化的特征" />
+            </label>
+            <label class="field field-wide">
+              <span>参考形象地址</span>
+              <input v-model.trim="draft.image_url" class="input" type="text" placeholder="https://… 或 /static/…" />
+            </label>
+          </div>
+        </section>
+
+        <section class="profile-group">
+          <div>
+            <h3>进入世界后会改变</h3>
+            <p class="field-note">这些是默认值，进入不同世界后会单独改写。</p>
+          </div>
+          <div class="editor-grid">
+            <label v-for="field in variableProfileFields" :key="field.key" class="field field-wide">
+              <span>{{ field.label }}<small class="change-tag">随世界变化</small></span>
+              <input v-if="field.short" v-model.trim="draft[field.key]" class="input" :maxlength="field.max" :placeholder="field.placeholder" :required="field.key === 'name'" />
+              <textarea v-else v-model.trim="draft[field.key]" class="input" rows="3" :maxlength="field.max" :placeholder="field.placeholder" />
+            </label>
+          </div>
+        </section>
 
         <div v-if="draft.image_url" class="reference-preview">
           <img :src="publicMediaUrl(draft.image_url)" :alt="`${draft.name || '角色'}参考形象`" />
@@ -127,9 +131,32 @@ type GlobalCharacter = {
   appearance?: string | null
   physique?: string | null
   default_personality?: string | null
+  default_values?: string | null
+  default_speech?: string | null
+  default_habits?: string | null
+  default_desires?: string | null
+  default_fears?: string | null
+  default_relationships?: string | null
+  default_abilities?: string | null
+  default_background?: string | null
   default_styling?: string | null
   image_url?: string | null
 }
+
+const variableProfileFields = [
+  { key: 'name', label: '默认姓名', max: 80, short: true, placeholder: '角色姓名' },
+  { key: 'role', label: '默认身份', max: 120, short: true, placeholder: '例如：调查记者' },
+  { key: 'default_personality', label: '默认性格', max: 2000, placeholder: '处事方式和性格倾向' },
+  { key: 'default_values', label: '默认价值观', max: 2000, placeholder: '这个人坚持或反对什么' },
+  { key: 'default_speech', label: '默认说话方式', max: 2000, placeholder: '用词、语气、说与不说的习惯' },
+  { key: 'default_habits', label: '默认习惯', max: 2000, placeholder: '日常动作、癖好和行事惯例' },
+  { key: 'default_desires', label: '默认愿望', max: 2000, placeholder: '长期想得到或想完成的事' },
+  { key: 'default_fears', label: '默认恐惧', max: 2000, placeholder: '害怕失去、面对或再次发生的事' },
+  { key: 'default_relationships', label: '默认在乎的人', max: 2000, placeholder: '放不下的人，以及彼此的关系' },
+  { key: 'default_abilities', label: '默认能力', max: 2000, placeholder: '擅长、不擅长和赖以生活的本事' },
+  { key: 'default_background', label: '默认经历', max: 2000, placeholder: '形成这个人的经历' },
+  { key: 'default_styling', label: '默认服装', max: 2000, placeholder: '作为跨世界适配起点的发型、服装和配饰' },
+] as const
 
 const characters = ref<GlobalCharacter[]>([])
 const loading = ref(true)
@@ -144,6 +171,14 @@ const draft = reactive({
   appearance: '',
   physique: '',
   default_personality: '',
+  default_values: '',
+  default_speech: '',
+  default_habits: '',
+  default_desires: '',
+  default_fears: '',
+  default_relationships: '',
+  default_abilities: '',
+  default_background: '',
   default_styling: '',
   image_url: '',
 })
@@ -155,7 +190,13 @@ const filteredCharacters = computed(() => characters.value.filter(character =>
 
 function startNew() {
   editorVersion += 1
-  Object.assign(draft, { id: 0, name: '', role: '', appearance: '', physique: '', default_personality: '', default_styling: '', image_url: '' })
+  Object.assign(draft, {
+    id: 0,
+    appearance: '',
+    physique: '',
+    image_url: '',
+    ...Object.fromEntries(variableProfileFields.map(field => [field.key, ''])),
+  })
 }
 
 function edit(character: GlobalCharacter) {
@@ -166,9 +207,8 @@ function edit(character: GlobalCharacter) {
     role: character.role || '',
     appearance: character.appearance || '',
     physique: character.physique || '',
-    default_personality: character.default_personality || '',
-    default_styling: character.default_styling || '',
     image_url: character.image_url || '',
+    ...Object.fromEntries(variableProfileFields.map(field => [field.key, character[field.key] || ''])),
   })
 }
 
@@ -182,12 +222,10 @@ async function save() {
   const submittedVersion = editorVersion
   const submittedDraft = { ...draft }
   const payload = {
+    ...Object.fromEntries(variableProfileFields.map(field => [field.key, submittedDraft[field.key]])),
     name: submittedDraft.name.trim(),
-    role: submittedDraft.role,
     appearance: submittedDraft.appearance,
     physique: submittedDraft.physique,
-    default_personality: submittedDraft.default_personality,
-    default_styling: submittedDraft.default_styling,
     image_url: submittedDraft.image_url || null,
   }
   try {
@@ -220,9 +258,8 @@ async function generate() {
       role: generated.role || '',
       appearance: generated.appearance || '',
       physique: generated.physique || '',
-      default_personality: generated.default_personality || '',
-      default_styling: generated.default_styling || '',
       image_url: generated.image_url || '',
+      ...Object.fromEntries(variableProfileFields.map(field => [field.key, generated[field.key] || ''])),
     })
     toast.success('角色草稿已生成，可继续编辑后保存')
   } catch (error) {
@@ -287,6 +324,10 @@ onMounted(async () => {
 .generation-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; padding: 16px 0 3px; }
 .generation-tools textarea { width: 100%; color: var(--text-0); font: inherit; font-size: 13px; resize: vertical; }
 .saved-mark { display: flex; align-items: center; gap: 6px; color: var(--success); font-size: 12px; }
+.profile-group { display: grid; gap: 14px; padding-top: 18px; }
+.profile-group h3 { margin: 0; font-size: 15px; }
+.field-note { margin: 0; color: var(--text-2); font-size: 13px; font-weight: 400; line-height: 1.6; }
+.change-tag { margin-left: 8px; color: var(--text-3); font-size: 12px; font-weight: 400; }
 .editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 18px; padding: 19px 0; }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 600; }
 .field-wide { grid-column: 1 / -1; }
