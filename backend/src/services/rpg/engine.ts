@@ -11,7 +11,7 @@ import { generateImage, generateVideo } from '../generation.js'
 import { EXTRACT_TARGETS, runExtraction } from '../extraction.js'
 import { getDramaStylePrompt, prefixVideoStyle } from '../style-preset.js'
 import { ensureSceneFinalPrompt } from '../final-prompt.js'
-import { resolveAssetReferenceImage, scheduleEpisodeAssetImages } from '../asset-images.js'
+import { latestAssetTask, isEpisodeAssetImagesPending, resolveAssetReferenceImage, scheduleEpisodeAssetImages } from '../asset-images.js'
 import { snapshotCharacterReferences } from '../character-image.js'
 import {
   applyReferenceMarkers,
@@ -128,10 +128,8 @@ export async function listSessions() {
   }))
 }
 
-function createGlobalPlayerCharacter(
+function globalPlayerCharacterDraft(
   globalCharacter: typeof schema.globalCharacters.$inferSelect,
-  dramaId: number,
-  episodeId: number,
 ): PlayerCharacterSnapshot {
   const defaults = {
     name: globalCharacter.name || '',
@@ -147,7 +145,24 @@ function createGlobalPlayerCharacter(
     background: globalCharacter.defaultBackground || '',
     styling: globalCharacter.defaultStyling || '',
   }
-  const profile = playerProfileFromDefaults(defaults)
+  return {
+    global_character_id: globalCharacter.id,
+    project_character_id: 0,
+    ...playerProfileFromDefaults(defaults),
+    appearance: globalCharacter.appearance || '',
+    physique: globalCharacter.physique || '',
+    image_url: '',
+    adapted: false,
+    world_portrait_identity: true,
+  }
+}
+
+function createGlobalPlayerCharacter(
+  globalCharacter: typeof schema.globalCharacters.$inferSelect,
+  profile: PlayerCharacterSnapshot,
+  dramaId: number,
+  episodeId: number,
+): PlayerCharacterSnapshot {
   return db.transaction((tx) => {
     const current = tx.select().from(schema.globalCharacters).where(eq(schema.globalCharacters.id, globalCharacter.id)).get()
     const globalId = current && !current.deletedAt ? globalCharacter.id : null
@@ -165,7 +180,7 @@ function createGlobalPlayerCharacter(
       personality: profile.personality,
       background: profile.background,
       finalPrompt: null,
-      imageUrl: globalCharacter.imageUrl || null,
+      imageUrl: null,
       referenceImages: snapshotCharacterReferences(globalCharacter.imageUrl, globalCharacter.referenceImages),
       createdAt: ts,
       updatedAt: ts,
@@ -173,13 +188,12 @@ function createGlobalPlayerCharacter(
     const projectCharacterId = getInsertId(res)
     tx.insert(schema.episodeCharacters).values({ episodeId, characterId: projectCharacterId, createdAt: ts }).run()
     return {
+      ...profile,
       global_character_id: globalId,
       project_character_id: projectCharacterId,
-      ...profile,
       appearance: globalCharacter.appearance || '',
       physique: globalCharacter.physique || '',
-      image_url: globalCharacter.imageUrl || '',
-      adapted: false,
+      image_url: '',
     }
   })
 }
@@ -251,12 +265,16 @@ export async function createSession(input: {
   tagline?: string
 }) {
   await ensurePresetWorlds()
-  const world = input.world_id
+  const worldDraft = input.world_id
     ? await mustWorld(input.world_id)
-    : await createCustomWorld(input)
+    : customWorldSeed(input)
   const globalCharacter = input.global_character_id
     ? await getGlobalCharacter(input.global_character_id)
     : null
+  const adaptedGlobal = globalCharacter
+    ? await adaptGlobalForWorld(worldDraft, globalPlayerCharacterDraft(globalCharacter))
+    : null
+  const world = 'id' in worldDraft ? worldDraft : await createCustomWorld(worldDraft)
   const ts = now()
   const state = emptyWorldState(world.premise)
   const dramaRes = await db.insert(schema.dramas).values({
@@ -285,8 +303,8 @@ export async function createSession(input: {
   })
   const episodeId = getInsertId(episodeRes)
   let playerCharacter: PlayerCharacterSnapshot | null = null
-  if (globalCharacter) {
-    playerCharacter = createGlobalPlayerCharacter(globalCharacter, dramaId, episodeId)
+  if (globalCharacter && adaptedGlobal) {
+    playerCharacter = createGlobalPlayerCharacter(globalCharacter, adaptedGlobal, dramaId, episodeId)
   } else {
     playerCharacter = await createWorldPlayerCharacter(world, dramaId, episodeId)
   }
@@ -326,6 +344,9 @@ export async function getSession(sessionId: number) {
   const playerAsset = playerCharacter
     ? assets.characters.find(character => character.id === playerCharacter.project_character_id)
     : null
+  // 先读准备状态再读任务，避免任务刚创建时短暂显示失败。
+  const imagePending = isEpisodeAssetImagesPending(session.episodeId)
+  const playerTask = playerAsset ? await latestAssetTask('character', playerAsset.id, playerAsset.imageRevision) : null
   if (playerCharacter) {
     playerCharacter.global_character_id = playerAsset?.globalCharacterId || null
     playerCharacter.image_url = playerAsset
@@ -341,7 +362,14 @@ export async function getSession(sessionId: number) {
     turn_count: session.turnCount || 0,
     world: world ? serializeWorld(world) : null,
     world_state: parseJson<RpgWorldState>(session.worldState, emptyWorldState()),
-    player_character: playerCharacter,
+    player_character: playerCharacter ? {
+      ...playerCharacter,
+      image_status: playerCharacter.image_url ? 'completed' : imagePending || playerTask?.status === 'processing' ? 'processing' : 'failed',
+      image_error: playerTask?.status === 'failed' && playerTask.errorMsg?.startsWith('参考图')
+        ? playerTask.errorMsg
+        : playerTask?.status === 'failed' && playerTask.errorMsg?.startsWith('当前图片模型不支持参考图')
+          ? playerTask.errorMsg : null,
+    } : null,
     assets: serializePlayAssets(assets),
     turns: refreshed.map(serializeTurn),
     acting: actingSessions.has(sessionId),
@@ -385,8 +413,9 @@ export async function updateSessionPlayerCharacter(sessionId: number, input: {
         const globalId = Number(input.global_character_id)
         if (!Number.isInteger(globalId) || globalId <= 0) throw new Error('请先选择一位全局主角')
         const globalCharacter = await getGlobalCharacter(globalId)
+        const adaptedGlobal = await adaptGlobalForWorld(loaded.world, globalPlayerCharacterDraft(globalCharacter))
         prepareUncommittedOpeningForCharacterChange(loaded)
-        next = createGlobalPlayerCharacter(globalCharacter, loaded.session.dramaId, loaded.session.episodeId)
+        next = createGlobalPlayerCharacter(globalCharacter, adaptedGlobal, loaded.session.dramaId, loaded.session.episodeId)
         newProjectCharacterId = next.project_character_id
       }
       characterChanged = true
@@ -756,17 +785,16 @@ async function writeNovelChapter(loaded: PlayContext, turnIndex: number, actionL
   return produced.chapterText
 }
 
-async function adaptPlayerCharacter(loaded: PlayContext) {
-  if (!loaded.playerCharacter) return
-  const character = normalizeStoredPlayerCharacter(loaded.playerCharacter)
-  loaded.playerCharacter = character
-  let adapted = fallbackPlayerCharacter(character)
-  try {
+async function requestWorldPlayerCharacterAdaptation(
+  world: { title: string; genre?: string | null; premise: string },
+  character: PlayerCharacterSnapshot,
+  strict = false,
+) {
     const answer = await completeNovelPrompt([
-      '请把一个全局角色改编为当前世界中的主角版本。只改写姓名、身份、性格、价值观、说话方式、习惯、愿望、恐惧、在乎的人、能力、经历和服装。脸部外貌和身材必须保持原文，不要改写。',
-      `世界名称：${loaded.world.title}`,
-      `世界类型：${loaded.world.genre || '原创'}`,
-      `世界设定：${loaded.world.premise}`,
+      '请把一个全局角色改编为当前世界中的主角版本。姓名、身份、性格、价值观、说话方式、习惯、愿望、恐惧、在乎的人、能力、经历、发型、妆容、服装与配饰都应符合当前世界。脸部五官、面容和身体体型必须保持不变，不要输出或改写固定外貌和固定身材。若固定外貌中含有旧发型或旧妆容，造型以本世界版本为准。',
+      `世界名称：${world.title}`,
+      `世界类型：${world.genre || '原创'}`,
+      `世界设定：${world.premise}`,
       `默认姓名：${character.default_name}`,
       `默认身份：${character.default_role}`,
       `固定外貌：${character.appearance}`,
@@ -781,9 +809,36 @@ async function adaptPlayerCharacter(loaded: PlayContext) {
       `默认能力：${character.default_abilities}`,
       `默认经历：${character.default_background}`,
       `默认服装：${character.default_styling}`,
-      '返回 JSON 对象，字段为 name、role、personality、values、speech、habits、desires、fears、relationships、abilities、background、styling，值均为简体中文字符串。不要返回 Markdown。',
-    ].join('\n\n'), { timeoutMs: 45_000 })
-    adapted = adaptPlayerCharacterResponse(character, answer)
+      '返回 JSON 对象，字段为 name、role、personality、values、speech、habits、desires、fears、relationships、abilities、background、styling，所有字段均为非空简体中文字符串；styling 必须具体描述本世界发型、妆容、服装和配饰。每个字段用一句话，name、role 各不超过 20 字，其余字段各不超过 80 字，styling 不超过 120 字。不要返回 Markdown 或解释。',
+    ].join('\n\n'), { timeoutMs: 120_000, maxTokens: 4096 })
+    return adaptPlayerCharacterResponse(character, answer, strict)
+}
+
+async function adaptGlobalForWorld(world: { title: string; genre?: string | null; premise: string }, character: PlayerCharacterSnapshot) {
+  try {
+    return await requestWorldPlayerCharacterAdaptation(world, character, true)
+  } catch (error) {
+    console.error('[rpg] player-character-adaptation', error instanceof Error ? error.message : error)
+    if (error instanceof Error && error.message.includes('未配置文本模型')) {
+      throw new Error('主角世界适配失败：未配置文本模型，请先到「设置」页添加并启用 AI 服务')
+    }
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error('主角世界适配超时，请稍后重试或在「设置」页切换文本模型')
+    }
+    if (error instanceof Error && (error instanceof SyntaxError || error.message.startsWith('主角适配'))) {
+      throw new Error('主角世界适配失败：文本模型返回的角色资料不完整，请重试或切换文本模型')
+    }
+    throw new Error('主角世界适配失败，请检查文本模型或重试')
+  }
+}
+
+async function adaptPlayerCharacter(loaded: PlayContext) {
+  if (!loaded.playerCharacter) return
+  const character = normalizeStoredPlayerCharacter(loaded.playerCharacter)
+  loaded.playerCharacter = character
+  let adapted = fallbackPlayerCharacter(character)
+  try {
+    adapted = await requestWorldPlayerCharacterAdaptation(loaded.world, character)
   } catch (error) {
     console.error('[rpg] player-character-adaptation', error instanceof Error ? error.message : error)
   }
@@ -1148,14 +1203,13 @@ async function getGlobalCharacter(id: number) {
   return character
 }
 
-async function createCustomWorld(input: { title?: string; premise?: string; genre?: string; tagline?: string }) {
+function customWorldSeed(input: { title?: string; premise?: string; genre?: string; tagline?: string }): WorldSeed {
   const title = String(input.title || '').trim()
   const premise = String(input.premise || '').trim()
   if (!title) throw new Error('给这个世界起个名字')
   if (premise.length < 20) throw new Error('世界设定至少写 20 字，才知道从哪一幕写起')
   if (premise.length > 2000) throw new Error('世界设定请控制在 2000 字以内')
-  const ts = now()
-  const seed: WorldSeed = {
+  return {
     slug: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     title: title.slice(0, 40),
     tagline: String(input.tagline || '').trim().slice(0, 40),
@@ -1163,6 +1217,10 @@ async function createCustomWorld(input: { title?: string; premise?: string; genr
     genre: String(input.genre || '原创').trim().slice(0, 20) || '原创',
     style: LIVE_ACTION_CINEMATIC_STYLE.value,
   }
+}
+
+async function createCustomWorld(seed: WorldSeed) {
+  const ts = now()
   const res = await db.insert(schema.rpgWorlds).values({
     ...seed,
     isPreset: false,

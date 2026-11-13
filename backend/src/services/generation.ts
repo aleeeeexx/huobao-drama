@@ -16,7 +16,7 @@ import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 import { applyCodeccBrowserUserAgent } from '../agents/thinking-off.js'
 import { EDITS_FALLBACK_MESSAGE, GROK_REFERENCE_HTTPS_MESSAGE, IMAGE_GATEWAY_ATTEMPTS, IMAGE_GATEWAY_RETRY_MS, imageGatewayError, isOfficialXaiBase, isRetryableImageGatewayStatus, officialXaiEditsTarget, promptAfterEditsFallback, selectGrokReferenceUrl, shouldFallbackFromImageEdits } from './image-gateway.js'
-import { characterTaskMatchesRevision } from './character-image.js'
+import { characterTaskMatchesRevision, snapshotGlobalCharacterImage } from './character-image.js'
 
 type TaskType = 'image' | 'video'
 
@@ -41,11 +41,16 @@ interface GenerateImageParams {
   dramaId?: number
   sceneId?: number
   characterId?: number
+  globalCharacterId?: number
+  globalCharacterImageSource?: ReturnType<typeof snapshotGlobalCharacterImage>
+  globalCharacterImageStyle?: { value: string; prompt: string }
   propId?: number
   prompt: string
   model?: string
   size?: string
   referenceImages?: string[]
+  /** 该任务不能丢弃身份参考图后退回纯文生图。 */
+  requireReferenceImages?: boolean
   frameType?: string
   configId?: number
   characterImageRevision?: number
@@ -98,7 +103,11 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     size: params.size || '1920x1080',
     frameType: params.frameType,
     referenceImages: params.referenceImages,
+    requireReferenceImages: params.requireReferenceImages,
     characterImageRevision: params.characterImageRevision ?? character?.imageRevision,
+    globalCharacterId: params.globalCharacterId,
+    globalCharacterImageSource: params.globalCharacterImageSource,
+    globalCharacterImageStyle: params.globalCharacterImageStyle,
   })
 
   logTaskStart('ImageTask', 'enqueue', {
@@ -330,7 +339,7 @@ async function processTask(id: number, config: AIConfig) {
     }
 
     const hadReferences = Array.isArray(params.referenceImages) && params.referenceImages.length > 0
-    if (type === 'image' && shouldFallbackFromImageEdits(resp.status, params.frameType, hadReferences, usedOfficialXaiEdits)) {
+    if (type === 'image' && !params.requireReferenceImages && shouldFallbackFromImageEdits(resp.status, params.frameType, hadReferences, usedOfficialXaiEdits)) {
       await resp.body?.cancel().catch(() => undefined)
       logTaskWarn(label, 'edits-fallback', {
         id,
@@ -579,6 +588,22 @@ export async function writeBackImageAssets(record: SysTaskRecord, localPath: str
   if (record.propId) {
     await db.update(schema.props).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.props.id, record.propId))
   }
+  if (typeof params.globalCharacterId === 'number') {
+    db.transaction(tx => {
+      const character = tx.select().from(schema.globalCharacters).where(eq(schema.globalCharacters.id, params.globalCharacterId)).get()
+      if (!character || character.deletedAt) return
+      // 生图期间修改了外貌或参考图，保留用户后来保存的形象。
+      const source = params.globalCharacterImageSource
+      const currentSource: Record<string, unknown> = snapshotGlobalCharacterImage(character)
+      // 按任务实际记录的字段比较，兼容新增资料字段前提交的任务快照。
+      if (source && Object.entries(source).some(([key, value]) => currentSource[key] !== value)) return
+      const laterTasks = tx.select({ params: schema.sysTask.params }).from(schema.sysTask)
+        .where(and(eq(schema.sysTask.type, 'image'), gt(schema.sysTask.id, record.id))).all()
+      if (laterTasks.some(task => parseTaskParams(task.params).globalCharacterId === params.globalCharacterId)) return
+      tx.update(schema.globalCharacters).set({ imageUrl: localPath, updatedAt: now() })
+        .where(eq(schema.globalCharacters.id, params.globalCharacterId)).run()
+    })
+  }
 }
 
 async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, duration: number | null | undefined) {
@@ -714,7 +739,24 @@ async function buildImageProviderRequest(
   prompt: string | null | undefined,
 ) {
   const adapter = getImageAdapter(config.provider)
-  const resolvedReferenceImages = await resolveImageReferences(record.model || config.model, params.referenceImages)
+  const model = record.model || config.model
+  let resolvedReferenceImages: string[]
+  if (params.requireReferenceImages) {
+    if (!['openai', 'gemini'].includes(config.provider.toLowerCase())) {
+      throw new Error('当前图片模型不支持参考图，请更换支持参考图的图片服务后重试')
+    }
+    const primary = await resolveImageReferences(model, params.referenceImages?.slice(0, 1))
+    const usable = isGrokImageModel(model) ? primary[0]?.startsWith('https://') : primary[0]?.startsWith('data:image/')
+    if (!usable) {
+      throw new Error(isGrokImageModel(model)
+        ? '参考图无法交给图片模型，请使用可公开访问的 HTTPS 图片地址或更换图片服务后重试'
+        : '参考图无法读取，请检查角色参考图后重试')
+    }
+    const others = await resolveImageReferences(model, params.referenceImages?.slice(1))
+    resolvedReferenceImages = [...primary, ...others].slice(0, 6)
+  } else {
+    resolvedReferenceImages = await resolveImageReferences(model, params.referenceImages)
+  }
   const editsConfig = resolvedReferenceImages.length
     ? await grokEditsConfig(config, record.model || config.model)
     : null

@@ -7,12 +7,17 @@ import { db, schema } from '../db/index.js'
 
 export { prefixVideoStyle } from './style-prompt.js'
 
+export async function getActiveStylePreset(value: string) {
+  const [preset] = await db.select().from(schema.stylePresets)
+    .where(and(eq(schema.stylePresets.value, value), eq(schema.stylePresets.isActive, true)))
+  return preset || null
+}
+
 /** 查询项目绑定的风格预设英文提示词片段；查不到返回 '' */
 export async function getDramaStylePrompt(dramaId: number | null | undefined): Promise<string> {
   if (!dramaId) return ''
   const [drama] = await db.select().from(schema.dramas).where(eq(schema.dramas.id, dramaId))
   if (!drama?.style) return ''
-  const [preset] = await db.select().from(schema.stylePresets)
-    .where(and(eq(schema.stylePresets.value, drama.style), eq(schema.stylePresets.isActive, true)))
+  const preset = await getActiveStylePreset(drama.style)
   return preset?.prompt || ''
 }

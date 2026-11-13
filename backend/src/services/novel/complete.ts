@@ -29,10 +29,12 @@ const CONNECT_FAILURE_CODES = new Set([
 
 export interface NovelCompletionDependencies {
   config?: AIConfig
-  /** 按优先级排列。当前文本通道 502/503/524 时，改用下一条。 */
+  /** 按优先级排列。当前文本通道 502/503/524、连接失败或超时时，改用下一条。 */
   configs?: AIConfig[]
   fetchImpl?: typeof fetch
   timeoutMs?: number
+  /** 短 JSON 等任务使用独立输出预算；章节默认沿用 NOVEL_MAX_TOKENS。 */
+  maxTokens?: number
 }
 
 /** 当前通道暂时不可用时，才换下一条已启用的文本配置。鉴权失败和内容错误不换。 */
@@ -57,15 +59,16 @@ export async function completeNovelPrompt(prompt: string, deps?: NovelCompletion
   for (let index = 0; index < configs.length; index += 1) {
     const config = configs[index]
     try {
-      return await completeWithConfig(prompt, config, deps?.fetchImpl, deps?.timeoutMs)
+      return await completeWithConfig(prompt, config, deps?.fetchImpl, deps?.timeoutMs, deps?.maxTokens)
     } catch (error) {
       lastError = error
       const status = unavailableStatus(error)
       const connectFailed = isConnectFailure(error)
+      const timedOut = error instanceof Error && error.name === 'TimeoutError'
       const next = configs[index + 1]
-      if ((!status && !connectFailed) || !next) throw novelCallError(error)
+      if ((!status && !connectFailed && !timedOut) || !next) throw novelCallError(error)
       logTaskWarn('Novel', 'text-config-fallback', {
-        status: status ?? 'connect',
+        status: status ?? (timedOut ? 'timeout' : 'connect'),
         fromModel: config.model,
         toModel: next.model,
       })
@@ -74,7 +77,7 @@ export async function completeNovelPrompt(prompt: string, deps?: NovelCompletion
   throw lastError instanceof Error ? lastError : new Error(EMPTY_NOVEL_RESULT)
 }
 
-async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: typeof fetch, timeoutMs?: number): Promise<string> {
+async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: typeof fetch, timeoutMs?: number, maxTokens?: number): Promise<string> {
   const provider = config.provider.toLowerCase()
   const baseURL = getTextProviderBaseUrl(config)
   const temperature = config.temperature ?? NOVEL_TEMPERATURE
@@ -87,8 +90,8 @@ async function completeWithConfig(prompt: string, config: AIConfig, fetchImpl?: 
     fetchImpl: outbound,
   })
   const call = patched || outbound
-  if (provider === 'gemini') return completeGemini(call, baseURL, config.apiKey, config.model, prompt, temperature, timeoutMs)
-  return completeChat(call, baseURL, config.apiKey, config.model, prompt, temperature, timeoutMs)
+  if (provider === 'gemini') return completeGemini(call, baseURL, config.apiKey, config.model, prompt, temperature, timeoutMs, maxTokens)
+  return completeChat(call, baseURL, config.apiKey, config.model, prompt, temperature, timeoutMs, maxTokens)
 }
 
 async function completeChat(
@@ -99,16 +102,21 @@ async function completeChat(
   prompt: string,
   temperature: number,
   timeoutMs = NOVEL_TIMEOUT_MS,
+  maxTokens?: number,
 ): Promise<string> {
   const url = `${baseURL.replace(/\/+$/, '')}/chat/completions`
-  return completeWithRetry(async () => {
+  return completeWithRetry(() => withCompletionTimeout(timeoutMs, async (signal) => {
     const body: Record<string, unknown> = {
       model,
       messages: [{ role: 'user', content: prompt }],
       temperature,
       stream: true,
     }
-    if (!/api\.openai\.com/.test(baseURL)) body.max_tokens = NOVEL_MAX_TOKENS
+    if (/api\.openai\.com/.test(baseURL)) {
+      if (maxTokens != null) body.max_completion_tokens = maxTokens
+    } else {
+      body.max_tokens = maxTokens ?? NOVEL_MAX_TOKENS
+    }
     const response = await call(url, {
       method: 'POST',
       headers: {
@@ -117,7 +125,7 @@ async function completeChat(
         Accept: 'text/event-stream',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     })
     if (!response.ok) {
       const status = response.status
@@ -125,7 +133,7 @@ async function completeChat(
       throw new Error(`小说章节生成失败（${status}）`)
     }
     return requireNovelText(assembleChatCompletionText(await response.text()))
-  })
+  }))
 }
 
 async function completeGemini(
@@ -136,16 +144,16 @@ async function completeGemini(
   prompt: string,
   temperature: number,
   timeoutMs = NOVEL_TIMEOUT_MS,
+  maxTokens = NOVEL_MAX_TOKENS,
 ): Promise<string> {
   const root = `${baseURL.replace(/\/+$/, '')}/models/${encodeURIComponent(model)}`
   const streamUrl = `${root}:streamGenerateContent?alt=sse`
   const plainUrl = `${root}:generateContent`
-  return completeWithRetry(async () => {
+  return completeWithRetry(() => withCompletionTimeout(timeoutMs, async (signal) => {
     const payload = JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature, maxOutputTokens: NOVEL_MAX_TOKENS },
+      generationConfig: { temperature, maxOutputTokens: maxTokens },
     })
-    const signal = AbortSignal.timeout(timeoutMs)
     let response = await call(streamUrl, {
       method: 'POST',
       headers: {
@@ -174,7 +182,18 @@ async function completeGemini(
       throw new Error(`小说章节生成失败（${status}）`)
     }
     return requireNovelText(assembleGeminiCompletionText(await response.text()))
-  })
+  }))
+}
+
+async function withCompletionTimeout(timeoutMs: number, run: (signal: AbortSignal) => Promise<string>): Promise<string> {
+  const signal = AbortSignal.timeout(timeoutMs)
+  try {
+    return await run(signal)
+  } catch (error) {
+    // response.text() 在超时中断流时可能只抛 AbortError，保留 signal 中的 TimeoutError 供备用通道和界面识别。
+    if (signal.aborted) throw signal.reason
+    throw error
+  }
 }
 
 async function completeWithRetry(run: () => Promise<string>): Promise<string> {

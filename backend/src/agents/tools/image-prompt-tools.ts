@@ -14,15 +14,30 @@ import { db, schema } from '../../db/index.js'
 import { and, eq, sql } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { getDramaStylePrompt } from '../../services/style-preset.js'
-import { getDramaId } from '../context.js'
+import { getDramaId, getGlobalCharacterPrompt } from '../context.js'
 
 // ─── 角色提示词 ───────────────────────────────────────
 
 const readCharacters = createTool({
   id: 'read_characters',
-  description: '读取当前剧集中的所有角色信息，用于生成角色三视图最终提示词。',
+  description: '读取当前项目角色，或本次指定的全局角色资料，用于生成正脸特写加全身三视图的角色参考图提示词。',
   inputSchema: z.object({}),
   execute: async (_input, context) => {
+    const globalPrompt = getGlobalCharacterPrompt(context?.requestContext)
+    if (globalPrompt) {
+      const character = globalPrompt.character
+      return { characters: [{
+        id: character.id,
+        name: character.name,
+        role: character.role || '',
+        description: character.appearance || '',
+        appearance: character.appearance || '',
+        physique: character.physique || '',
+        styling: character.styling || '',
+        personality: character.personality || '',
+        final_prompt: globalPrompt.finalPrompt || '',
+      }] }
+    }
     const dramaId = getDramaId(context?.requestContext)
     if (!dramaId) return { error: 'Missing dramaId in request context' }
     const chars = (await db.select().from(schema.characters)
@@ -37,6 +52,7 @@ const readCharacters = createTool({
         appearance: c.appearance || '',
         physique: c.physique || '',
         styling: c.styling || '',
+        personality: c.personality || '',
         final_prompt: c.finalPrompt || '',
       })),
     }
@@ -45,12 +61,24 @@ const readCharacters = createTool({
 
 const saveCharacterFinalPrompt = createTool({
   id: 'save_character_final_prompt',
-  description: '保存为角色创作的三视图最终提示词。项目视觉风格会由工具自动拼接，prompt 参数中不要包含风格词。',
+  description: '保存为角色创作的参考图最终提示词（正脸特写加全身三视图）。项目风格或本次选定风格由工具自动拼接，prompt 参数中不要包含风格词。全局角色结果保存到本次请求供生图使用。',
   inputSchema: z.object({
     character_id: z.number(),
     prompt: z.string().describe('角色三视图最终提示词（使用会话语言指令指定的目标语言，不含风格词）'),
   }),
   execute: async ({ character_id, prompt }, context) => {
+    const globalPrompt = getGlobalCharacterPrompt(context?.requestContext)
+    if (globalPrompt) {
+      if (character_id !== globalPrompt.character.id) return { error: '只能保存本次指定的全局角色提示词' }
+      if (!prompt.trim()) return { error: '角色提示词不能为空' }
+      globalPrompt.finalPrompt = globalPrompt.stylePrompt ? `${globalPrompt.stylePrompt}, ${prompt.trim()}` : prompt.trim()
+      return {
+        character_id,
+        character_name: globalPrompt.character.name,
+        saved: true,
+        final_prompt: globalPrompt.finalPrompt,
+      }
+    }
     const dramaId = getDramaId(context?.requestContext)
     if (!dramaId) return { error: 'Missing dramaId in request context' }
     const [c] = await db.select().from(schema.characters)

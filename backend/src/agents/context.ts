@@ -5,9 +5,24 @@
 import { RequestContext } from '@mastra/core/request-context'
 import { getContentLanguage, type ContentLanguage } from '../services/app-settings.js'
 
+/** 全局角色不属于项目；提示词结果仅保存在本次请求中，随后交给图片任务。 */
+export interface GlobalCharacterPromptContext {
+  character: {
+    id: number
+    name: string
+    role: string | null
+    appearance: string | null
+    physique: string | null
+    styling: string | null
+    personality: string | null
+  }
+  stylePrompt: string
+  finalPrompt?: string
+}
+
 export interface AgentRequestContextValues {
-  episodeId: number
-  dramaId: number
+  episodeId?: number
+  dramaId?: number
   modelOverride?: string
   textConfigId?: number
   /** AI 内容语言；缺省时读全局设置（app_settings.content_language） */
@@ -18,6 +33,7 @@ export interface AgentRequestContextValues {
    */
   storyboardShotNumber?: number
   characterImageRevision?: { id: number; revision: number; invalidateOnSave?: boolean }
+  globalCharacterPrompt?: GlobalCharacterPromptContext
   extractionScript?: string
   screenplayRewrite?: { source: string; saved?: string }
   storyboardScript?: string
@@ -25,12 +41,13 @@ export interface AgentRequestContextValues {
 
 export function buildAgentRequestContext(values: AgentRequestContextValues): RequestContext<AgentRequestContextValues> {
   const rc = new RequestContext<AgentRequestContextValues>()
-  rc.set('episodeId', values.episodeId)
-  rc.set('dramaId', values.dramaId)
+  if (values.episodeId !== undefined) rc.set('episodeId', values.episodeId)
+  if (values.dramaId !== undefined) rc.set('dramaId', values.dramaId)
   if (values.modelOverride) rc.set('modelOverride', values.modelOverride)
   if (values.textConfigId) rc.set('textConfigId', values.textConfigId)
   if (values.storyboardShotNumber) rc.set('storyboardShotNumber', values.storyboardShotNumber)
   if (values.characterImageRevision) rc.set('characterImageRevision', values.characterImageRevision)
+  if (values.globalCharacterPrompt) rc.set('globalCharacterPrompt', values.globalCharacterPrompt)
   if (values.extractionScript !== undefined) rc.set('extractionScript', values.extractionScript)
   if (values.screenplayRewrite) rc.set('screenplayRewrite', values.screenplayRewrite)
   if (values.storyboardScript !== undefined) rc.set('storyboardScript', values.storyboardScript)
@@ -41,13 +58,19 @@ export function buildAgentRequestContext(values: AgentRequestContextValues): Req
 }
 
 export function getEpisodeId(requestContext: RequestContext | undefined): number | null {
+  if (getGlobalCharacterPrompt(requestContext)) return null
   const v = requestContext?.get('episodeId' as never)
   return typeof v === 'number' ? v : null
 }
 
 export function getDramaId(requestContext: RequestContext | undefined): number | null {
+  if (getGlobalCharacterPrompt(requestContext)) return null
   const v = requestContext?.get('dramaId' as never)
   return typeof v === 'number' ? v : null
+}
+
+export function getGlobalCharacterPrompt(requestContext: RequestContext | undefined): GlobalCharacterPromptContext | undefined {
+  return requestContext?.get('globalCharacterPrompt' as never) as GlobalCharacterPromptContext | undefined
 }
 
 /** 幻书追加分镜时只允许写入这个分镜号；制作台不设置，返回 null */

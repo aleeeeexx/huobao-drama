@@ -7,7 +7,7 @@ process.env.SQLITE_PATH = ':memory:'
 process.env.MYSQL_AUTO_IMPORT = 'false'
 
 const { db, schema } = await import('../src/db/index.js')
-const { createSession, getSession, narrateSession, updateSessionPlayerCharacter } = await import('../src/services/rpg/engine.js')
+const { createSession, getSession, listWorlds, narrateSession, updateSessionPlayerCharacter } = await import('../src/services/rpg/engine.js')
 const { default: characterRoutes } = await import('../src/routes/characters.js')
 const { extractTools } = await import('../src/agents/tools/extract-tools.js')
 const { buildAgentRequestContext } = await import('../src/agents/context.js')
@@ -20,6 +20,110 @@ const { initSqliteSchema } = await import('../src/db/sqlite-schema.js')
 const { exportNovelToText } = await import('../src/services/novel/project.js')
 const { enqueueAssetReferenceImage, isEpisodeAssetImagesPending } = await import('../src/services/asset-images.js')
 const { mastra } = await import('../src/mastra/index.js')
+const { withMockWorldAdaptation } = await import('./helpers/mock-world-adaptation.js')
+
+async function markLegacyPlayer(session: NonNullable<Awaited<ReturnType<typeof createSession>>>) {
+  await db.update(schema.rpgSessions).set({ playerCharacter: JSON.stringify({ ...session.player_character, adapted: false }) })
+    .where(eq(schema.rpgSessions.id, session.id))
+}
+
+test('a global protagonist is adapted before entering both preset and custom worlds', async (t) => {
+  t.mock.method(mastra, 'getAgent', (() => ({ generate: async () => {} })) as any)
+  const ts = new Date().toISOString()
+  const id = Number(db.insert(schema.globalCharacters).values({
+    name: '林雾', role: '医生', appearance: '丹凤眼，左眉浅疤，短发', physique: '高挑清瘦',
+    defaultStyling: '现代白大褂', imageUrl: '/static/original.png',
+    referenceImages: JSON.stringify(['/static/detail.png']), createdAt: ts, updatedAt: ts,
+  }).run().lastInsertRowid)
+  const preset = (await listWorlds())[0]
+  const prompts: string[] = []
+  const sessions = await withMockWorldAdaptation(() => Promise.all([
+    createSession({ world_id: preset.id, global_character_id: id }),
+    createSession({ title: '古代江湖', premise: '边城山雨欲来，一位游医在古老的驿站寻找失踪的朋友。', global_character_id: id }),
+  ]), prompt => {
+    prompts.push(prompt)
+    const ancient = prompt.includes('古代江湖')
+    return JSON.stringify({
+      name: ancient ? '林大夫' : '林记者', role: ancient ? '游医' : '调查记者',
+      personality: '沉着', values: '救人', speech: '简短', habits: '观察', desires: '寻人', fears: '失去线索',
+      relationships: '旧友', abilities: '医术', background: '多年寻访',
+      styling: ancient ? '古代发髻、淡妆、青色长袍与木簪' : '利落短发、淡妆、雨衣和记者证',
+      appearance: '错误的面容', physique: '错误的身材',
+    })
+  })
+  assert.equal(prompts.length, 2)
+  assert.ok(prompts.every(prompt => prompt.includes('脸部五官、面容和身体体型必须保持不变')))
+  for (const [index, session] of sessions.entries()) {
+    assert.ok(session?.player_character)
+    const player = session.player_character
+    assert.equal(player.adapted, true)
+    assert.equal(player.appearance, '丹凤眼，左眉浅疤，短发')
+    assert.equal(player.physique, '高挑清瘦')
+    assert.equal(player.styling, index ? '古代发髻、淡妆、青色长袍与木簪' : '利落短发、淡妆、雨衣和记者证')
+    assert.equal(player.image_url, '')
+    const character = db.select().from(schema.characters).where(eq(schema.characters.id, player.project_character_id)).get()!
+    assert.equal(character.styling, player.styling)
+    assert.equal(character.imageUrl, null)
+    assert.deepEqual(parseCharacterReferenceImages(character.referenceImages), ['/static/original.png', '/static/detail.png'])
+  }
+  const original = db.select().from(schema.globalCharacters).where(eq(schema.globalCharacters.id, id)).get()!
+  assert.equal(original.defaultStyling, '现代白大褂')
+  assert.equal(original.imageUrl, '/static/original.png')
+})
+
+test('a failed world adaptation leaves no partial world or session', async () => {
+  await listWorlds()
+  const ts = new Date().toISOString()
+  const id = Number(db.insert(schema.globalCharacters).values({ name: '失败测试角色', createdAt: ts, updatedAt: ts }).run().lastInsertRowid)
+  const counts = () => [schema.rpgWorlds, schema.dramas, schema.episodes, schema.characters, schema.rpgSessions]
+    .map(table => db.select().from(table).all().length)
+  const before = counts()
+  const input = { title: '无效适配世界', premise: '一位旅人穿过山谷，来到一座陌生的边境城镇。', global_character_id: id }
+  await assert.rejects(createSession(input), /未配置文本模型/)
+  assert.deepEqual(counts(), before)
+  await assert.rejects(withMockWorldAdaptation(() => createSession(input), () => '{"styling":"古装"}'), /文本模型返回的角色资料不完整/)
+  assert.deepEqual(counts(), before)
+  await assert.rejects(withMockWorldAdaptation(() => createSession(input), () => {
+    throw new DOMException('The operation timed out', 'TimeoutError')
+  }), /主角世界适配超时/)
+  assert.deepEqual(counts(), before)
+  await assert.rejects(withMockWorldAdaptation(() => createSession(input), () => '{"styling":}'), /文本模型返回的角色资料不完整/)
+  assert.deepEqual(counts(), before)
+})
+
+test('selecting a global protagonist in an existing session adapts before saving', async (t) => {
+  t.mock.method(mastra, 'getAgent', (() => ({ generate: async () => {} })) as any)
+  const session = await createSession({ title: '海上世界', premise: '一位旅人登上驶往远方的古老帆船，在风暴中寻找失踪的伙伴。' })
+  assert.ok(session)
+  await db.update(schema.rpgSessions).set({ playerCharacter: null }).where(eq(schema.rpgSessions.id, session.id))
+  const timestamp = new Date().toISOString()
+  const id = Number(db.insert(schema.globalCharacters).values({
+    name: '船上旅人', appearance: '圆脸与眉间小痣', physique: '身形矮小',
+    defaultStyling: '现代西装', imageUrl: '/static/traveler.png', createdAt: timestamp, updatedAt: timestamp,
+  }).run().lastInsertRowid)
+  const countCharacters = () => db.select().from(schema.characters).where(eq(schema.characters.dramaId, session.drama_id)).all().length
+  const before = countCharacters()
+  await assert.rejects(withMockWorldAdaptation(
+    () => updateSessionPlayerCharacter(session.id, { global_character_id: id }), () => '{"styling":"船员装"}',
+  ), /主角世界适配失败/)
+  assert.equal((await getSession(session.id))?.player_character, null)
+  assert.equal(countCharacters(), before)
+  const selected = await withMockWorldAdaptation(
+    () => updateSessionPlayerCharacter(session.id, { global_character_id: id }),
+    () => JSON.stringify({
+      name: '船上旅人', role: '水手', personality: '勇敢', values: '守信', speech: '爽朗', habits: '望海',
+      desires: '寻人', fears: '风暴', relationships: '伙伴', abilities: '航海', background: '远航多年',
+      styling: '短辫、淡妆、海员衬衫和帆布帽',
+    }),
+  )
+  assert.ok(selected?.player_character)
+  assert.equal(selected.player_character.appearance, '圆脸与眉间小痣')
+  assert.equal(selected.player_character.physique, '身形矮小')
+  assert.equal(selected.player_character.styling, '短辫、淡妆、海员衬衫和帆布帽')
+  const character = db.select().from(schema.characters).where(eq(schema.characters.id, selected.player_character.project_character_id)).get()!
+  assert.equal(character.imageUrl, null)
+  assert.deepEqual(parseCharacterReferenceImages(character.referenceImages), ['/static/traveler.png'])
+})
 
 test('image submission rejects a revision changed after its initial check', async (t) => {
   const ts = new Date().toISOString()
@@ -129,14 +233,15 @@ test('player life edits do not replace the portrait', async () => {
 test('opening adaptation keeps the portrait when clothing does not change', async () => {
   const headers = { 'content-type': 'application/json' }
   const created = await globalCharacterRoutes.request('/', { method: 'POST', headers, body: JSON.stringify({
-    name: '林雾', role: '医生', appearance: '短发', physique: '清瘦', default_styling: '深色风衣',
+    name: '林雾旧装', role: '医生', appearance: '短发', physique: '清瘦', default_styling: '深色风衣',
     default_personality: '先听后判断', default_values: '先救人', default_speech: '短句，不催问',
     default_habits: '进门先看窗', default_desires: '找到老师', default_fears: '再次迟到',
     default_relationships: '记挂老师和邻居孩子', default_abilities: '外伤处理', default_background: '在边境诊所长大',
   }) })
   const global = (await created.json() as any).data
-  const session = await createSession({ title: '服装未变', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id })
+  const session = await withMockWorldAdaptation(() => createSession({ title: '服装未变', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id }))
   assert.ok(session?.player_character)
+  await markLegacyPlayer(session)
   const id = session.player_character.project_character_id
   await db.update(schema.characters).set({ imageUrl: '/static/face.png', localPath: '/static/face.png', imageAuto: true, imageRevision: 2 })
     .where(eq(schema.characters.id, id))
@@ -165,10 +270,10 @@ test('opening adaptation replaces an automatic portrait when fallback clothing c
     name: '林雾改衣', default_styling: '深色风衣', appearance: '短发', physique: '清瘦',
   }) })
   const global = (await created.json() as any).data
-  const session = await createSession({ title: '服装改变', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id })
+  const session = await withMockWorldAdaptation(() => createSession({ title: '服装改变', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id }))
   assert.ok(session?.player_character)
   const id = session.player_character.project_character_id
-  const snapshot = { ...session.player_character, styling: '旧衣服' }
+  const snapshot = { ...session.player_character, styling: '旧衣服', adapted: false }
   await db.update(schema.rpgSessions).set({ playerCharacter: JSON.stringify(snapshot) }).where(eq(schema.rpgSessions.id, session.id))
   await db.update(schema.characters).set({ styling: '旧衣服', imageUrl: '/static/auto.png', localPath: '/static/auto.png', imageAuto: true, imageRevision: 1 })
     .where(eq(schema.characters.id, id))
@@ -507,8 +612,9 @@ test('opening adaptation preserves a portrait uploaded after selecting a global 
   const response = await globalCharacterRoutes.request('/', { method: 'POST', headers,
     body: JSON.stringify({ name: '开场上传角色', image_url: '/static/original.png' }) })
   const global = (await response.json() as any).data
-  const session = await createSession({ title: '开场上传', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id })
+  const session = await withMockWorldAdaptation(() => createSession({ title: '开场上传', premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id }))
   assert.ok(session?.player_character)
+  await markLegacyPlayer(session)
   const id = session.player_character.project_character_id
   await characterRoutes.request(`/${id}`, { method: 'PUT', headers,
     body: JSON.stringify({ image_url: '/static/uploaded.png', local_path: '/static/uploaded.png' }) })
@@ -541,8 +647,12 @@ test('opening adaptation preserves manual prompts and invalidates only stale gen
     body: JSON.stringify({ name: '提示词适配角色', default_styling: '旧衣服', image_url: '/static/portrait.png' }) })
   const global = (await response.json() as any).data
   const cases = ['manual', 'automatic', 'unchanged', 'concurrent', 'historic'] as const
-  const sessions = await Promise.all(cases.map(title => createSession({ title,
-    premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id })))
+  const sessions = await withMockWorldAdaptation(() => Promise.all(cases.map(title => createSession({ title,
+    premise: '一位旅行者来到陌生的城镇并寻找失散多年的朋友。', global_character_id: global.id }))))
+  for (const session of sessions) {
+    assert.ok(session?.player_character)
+    await markLegacyPlayer(session)
+  }
   await new Promise(resolve => setImmediate(resolve))
   const timestamp = new Date().toISOString()
   const config = db.insert(schema.aiServiceConfigs).values({ serviceType: 'text', provider: 'openai',
@@ -563,7 +673,8 @@ test('opening adaptation preserves manual prompts and invalidates only stale gen
     for (const [index, session] of sessions.entries()) {
       assert.ok(session?.player_character)
       const id = session.player_character.project_character_id
-      await db.update(schema.characters).set({ finalPrompt: '原提示词', finalPromptAuto: index !== 0 && index !== 4 }).where(eq(schema.characters.id, id))
+      await db.update(schema.characters).set({ finalPrompt: '原提示词', finalPromptAuto: index !== 0 && index !== 4,
+        ...(index === 0 ? { imageUrl: '/static/portrait.png' } : {}) }).where(eq(schema.characters.id, id))
       if (index === 1) await characterRoutes.request(`/${id}`, { method: 'PUT', headers,
         body: JSON.stringify({ image_url: '/static/uploaded-before.png', local_path: '/static/uploaded-before.png' }) })
       if (index !== 0) {
@@ -723,9 +834,9 @@ test('deleting a global character unlinks every project and allows saving again'
     name: '可重新保存的角色', appearance: '固定外貌', image_url: '/static/global.png',
   }) })
   const global = (await response.json() as any).data
-  const sessions = await Promise.all(['第一世界', '第二世界'].map(title => createSession({
+  const sessions = await withMockWorldAdaptation(() => Promise.all(['第一世界', '第二世界'].map(title => createSession({
     title, premise: '一位旅人穿过山谷，来到一座陌生的边境城镇。', global_character_id: global.id,
-  })))
+  }))))
   const [first, second] = sessions
   assert.ok(first?.player_character && second?.player_character)
   const ts = new Date().toISOString()
@@ -741,7 +852,7 @@ test('deleting a global character unlinks every project and allows saving again'
     const refreshed = await getSession(session.id)
     const playerId = session.player_character!.project_character_id
     assert.equal(refreshed?.player_character?.global_character_id, null)
-    assert.equal(refreshed?.player_character?.image_url, '/static/global.png')
+    assert.equal(refreshed?.player_character?.image_url, '')
     assert.equal(refreshed?.assets.characters.find(character => character.id === playerId)?.global_character_id, null)
     const [character] = await db.select().from(schema.characters).where(eq(schema.characters.id, playerId))
     assert.equal(character.globalCharacterId, null)
@@ -780,7 +891,7 @@ test('a global character deleted during session creation becomes a protected loc
     }
     return (insert as any)(table)
   }) as typeof db.insert)
-  const session = await createSession({ title: '并发删除', premise: '一位旅人穿过山谷，来到一座陌生的边境城镇。', global_character_id: global.id })
+  const session = await withMockWorldAdaptation(() => createSession({ title: '并发删除', premise: '一位旅人穿过山谷，来到一座陌生的边境城镇。', global_character_id: global.id }))
   assert.equal(deleted, true)
   assert.ok(session?.player_character)
   assert.equal(session.player_character.global_character_id, null)
@@ -796,7 +907,7 @@ test('a world keeps the global character references it started with', async () =
     name: '快照角色', image_url: '/static/first.png', reference_images: JSON.stringify(['/static/detail.png']),
   }) })
   const global = (await response.json() as any).data
-  const session = await createSession({ title: '角色快照', premise: '一位旅人穿过山谷，来到一座陌生的边境城镇。', global_character_id: global.id })
+  const session = await withMockWorldAdaptation(() => createSession({ title: '角色快照', premise: '一位旅人穿过山谷，来到一座陌生的边境城镇。', global_character_id: global.id }))
   assert.ok(session?.player_character)
   await globalCharacterRoutes.request(`/${global.id}`, { method: 'PUT', headers, body: JSON.stringify({ image_url: '/static/second.png' }) })
   const [character] = await db.select().from(schema.characters).where(eq(schema.characters.id, session.player_character.project_character_id))

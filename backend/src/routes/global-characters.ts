@@ -1,11 +1,17 @@
-import { eq, isNull } from 'drizzle-orm'
+import { desc, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { db, getInsertId, schema } from '../db/index.js'
 import { badRequest, created, notFound, now, success } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
 import { generateGlobalCharacterDraft } from '../services/global-character.js'
+import { ASSET_REFERENCE_FRAME, CHARACTER_IMAGE_SIZE, characterImagePrompt } from '../services/asset-images.js'
+import { generateGlobalCharacterFinalPrompt } from '../services/final-prompt.js'
+import { getActiveStylePreset } from '../services/style-preset.js'
+import { generateImage } from '../services/generation.js'
+import { parseCharacterReferenceImages, snapshotCharacterReferences, snapshotGlobalCharacterImage } from '../services/character-image.js'
 
 const app = new Hono()
+const imageSubmissions = new Set<number>()
 const editableFields = {
   name: 'name',
   role: 'role',
@@ -59,6 +65,61 @@ app.post('/generate', async (c) => {
     return success(c, await generateGlobalCharacterDraft(body.concept))
   } catch (error) {
     return badRequest(c, error instanceof Error ? error.message : '角色草稿生成失败')
+  }
+})
+
+app.post('/:id/generate-image', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isSafeInteger(id) || id <= 0) return badRequest(c, '角色编号无效')
+  if (imageSubmissions.has(id)) return badRequest(c, '该角色正在提交图片任务，请稍候')
+  imageSubmissions.add(id)
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    const [character] = await db.select().from(schema.globalCharacters).where(eq(schema.globalCharacters.id, id))
+    if (!character || character.deletedAt) return notFound(c, '全局角色不存在')
+    const style = typeof body.style === 'string' ? body.style.trim() : ''
+    if (!style) return badRequest(c, '请选择角色参考图的视觉风格')
+    const preset = await getActiveStylePreset(style)
+    if (!preset?.prompt.trim()) return badRequest(c, '所选视觉风格不存在或已停用，请重新选择')
+
+    const imageTasks = await db.select({ params: schema.sysTask.params, status: schema.sysTask.status })
+      .from(schema.sysTask).where(eq(schema.sysTask.type, 'image')).orderBy(desc(schema.sysTask.id))
+    const latestTask = imageTasks.find(task => {
+      try { return JSON.parse(task.params || '{}').globalCharacterId === id } catch { return false }
+    })
+    if (latestTask?.status === 'processing') return badRequest(c, '该角色已有图片任务正在生成，请稍候')
+
+    const source = snapshotGlobalCharacterImage(character)
+    const stylePrompt = preset.prompt
+    const finalPrompt = await generateGlobalCharacterFinalPrompt(character, stylePrompt, {
+      model: body.text_model, configId: body.text_config_id,
+    })
+    const [current] = await db.select().from(schema.globalCharacters).where(eq(schema.globalCharacters.id, id))
+    if (!current || current.deletedAt) return notFound(c, '全局角色不存在')
+    if (JSON.stringify(snapshotGlobalCharacterImage(current)) !== JSON.stringify(source)) {
+      return badRequest(c, '角色资料或参考图已更新，请重新生成图片')
+    }
+    const imageGenerationId = await generateImage({
+      globalCharacterId: id,
+      globalCharacterImageSource: source,
+      globalCharacterImageStyle: { value: preset.value, prompt: stylePrompt },
+      prompt: finalPrompt || characterImagePrompt({
+        name: character.name,
+        appearance: character.appearance,
+        physique: character.physique,
+        styling: character.defaultStyling,
+      }, stylePrompt),
+      size: CHARACTER_IMAGE_SIZE,
+      frameType: ASSET_REFERENCE_FRAME,
+      model: body.model,
+      configId: body.config_id,
+      referenceImages: parseCharacterReferenceImages(snapshotCharacterReferences(character.imageUrl, character.referenceImages)),
+    })
+    return success(c, { image_generation_id: imageGenerationId })
+  } catch (error) {
+    return badRequest(c, error instanceof Error ? error.message : '角色图生成失败')
+  } finally {
+    imageSubmissions.delete(id)
   }
 })
 

@@ -26,7 +26,8 @@ export class GeminiImageAdapter implements ImageProviderAdapter {
     const isGemini3Image = /gemini-3.*image/.test(modelName)
     const isOfficialHost = /generativelanguage\.googleapis\.com/.test(config.baseUrl || '')
 
-    if (isGemini3Image && isOfficialHost) {
+    // interactions 分支只发送文本；有参考图时使用支持图片输入的 generateContent。
+    if (isGemini3Image && isOfficialHost && !record.referenceImages) {
       return {
         url: joinProviderUrl(config.baseUrl, '/v1beta', '/interactions'),
         method: 'POST',

@@ -13,6 +13,7 @@
         <div>
           <h2>选择主角</h2>
           <p class="dim">可选全局角色，也可以根据世界设定自动生成本局主角。</p>
+          <p v-if="selectedCharacterId" class="dim">进入前会按世界设定适配主角，保持脸和身材；新妆造在后台生成。</p>
         </div>
         <NuxtLink to="/characters" class="library-link">管理角色库</NuxtLink>
       </div>
@@ -47,7 +48,7 @@
         <p class="tagline">{{ world.tagline }}</p>
         <p class="premise">{{ world.premise }}</p>
         <button class="btn btn-primary" type="button" :disabled="starting" @click="enterWorld(world)">
-          {{ starting ? '正在准备世界…' : `进入${world.title}` }}
+          {{ starting ? (selectedCharacterId ? '正在适配主角…' : '正在准备世界…') : `进入${world.title}` }}
         </button>
       </article>
     </section>
@@ -72,7 +73,7 @@
         </label>
         <div class="custom-actions">
           <button class="btn btn-primary" type="submit" :disabled="starting">
-            {{ starting ? '正在准备世界…' : '开始这个世界' }}
+            {{ starting ? (selectedCharacterId ? '正在适配主角…' : '正在准备世界…') : '开始这个世界' }}
           </button>
         </div>
       </form>

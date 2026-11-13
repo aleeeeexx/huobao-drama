@@ -17,7 +17,7 @@ import { imagePromptTools } from './tools/image-prompt-tools.js'
 import { loadAgentSkills, skillWorkspaces } from './skills.js'
 import { loadAgentPromptFile, loadBasePromptFile } from './prompts.js'
 import { buildLanguageDirective } from './language.js'
-import { getContentLanguageFromRC } from './context.js'
+import { getContentLanguageFromRC, getGlobalCharacterPrompt } from './context.js'
 import { installCodeccUserAgentFetch, installThinkingOffFetch } from './thinking-off.js'
 
 // Default prompts (used when workspace/prompts/<type>.md 文件缺失时兜底)
@@ -302,7 +302,10 @@ function buildInstructions(type: string) {
     const baseInstructions = promptFile?.instructions || defaults.instructions
     const skillInstructions = await loadAgentSkills(type, lang)
     const languageDirective = buildLanguageDirective(lang)
-    return [baseInstructions, skillInstructions, languageDirective]
+    const globalCharacterDirective = getGlobalCharacterPrompt(requestContext)
+      ? '本次仅为指定全局角色生成参考图提示词，没有项目或剧集。read_characters 只返回该角色；save_character_final_prompt 将结果保存到本次请求供生图使用，自动注入选定风格。遵循角色参考图技能的正脸特写加全身三视图规范。'
+      : ''
+    return [baseInstructions, skillInstructions, globalCharacterDirective, languageDirective]
       .filter(Boolean)
       .join('\n\n')
   }
@@ -328,7 +331,9 @@ export const agentRegistry: Record<string, Agent> = Object.fromEntries(
       name: DEFAULT_PROMPTS[type].name,
       instructions: buildInstructions(type),
       model: buildModel(type),
-      tools: AGENT_TOOLS[type],
+      tools: ({ requestContext }) => type === 'prompt_generator' && getGlobalCharacterPrompt(requestContext)
+        ? { readCharacters: imagePromptTools.readCharacters, saveCharacterFinalPrompt: imagePromptTools.saveCharacterFinalPrompt }
+        : AGENT_TOOLS[type],
       workspace: skillWorkspaces[type],
       skillsFormat: 'markdown',
     }),

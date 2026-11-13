@@ -29,6 +29,8 @@ export interface PlayerCharacterSnapshot {
   styling: string
   image_url: string
   adapted: boolean
+  /** 新世界的全局主角以参考图锁定身份，独立生成本局妆造。 */
+  world_portrait_identity?: boolean
 }
 
 export const PLAYER_PROFILE_FIELDS = [
@@ -80,12 +82,16 @@ export function normalizeStoredPlayerCharacter(value: PlayerCharacterSnapshot): 
     ...profile,
     image_url: text('image_url'),
     adapted: stored.adapted === true,
+    world_portrait_identity: stored.world_portrait_identity === true,
   }
 }
 
-export function adaptPlayerCharacter(character: PlayerCharacterSnapshot, response: string): PlayerCharacterSnapshot {
+export function adaptPlayerCharacter(character: PlayerCharacterSnapshot, response: string, strict = false): PlayerCharacterSnapshot {
   const current = normalizeStoredPlayerCharacter(character)
   const result = parseModelObject(response)
+  if (strict && PLAYER_PROFILE_FIELDS.some(field => typeof result[field.world] !== 'string' || !(result[field.world] as string).trim())) {
+    throw new Error('主角适配结果不完整')
+  }
   const adapted: PlayerCharacterSnapshot = { ...current, adapted: true }
   for (const field of PLAYER_PROFILE_FIELDS) {
     adapted[field.world] = stringValue(result[field.world], current[field.fallback])

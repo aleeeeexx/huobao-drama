@@ -77,6 +77,7 @@ export const characterAPI = {
 export const globalCharacterAPI = {
   list: () => api.get<any[]>('/global-characters'),
   generate: (concept: string) => api.post<any>('/global-characters/generate', { concept }),
+  generateImage: (id: number, style: string, model?: string, configId?: number, textModel?: string, textConfigId?: number) => api.post<{ image_generation_id: number }>(`/global-characters/${id}/generate-image`, { style, model: model || undefined, config_id: configId || undefined, text_model: textModel || undefined, text_config_id: textConfigId || undefined }),
   create: (data: any) => api.post('/global-characters', data),
   update: (id: number, data: any) => api.put(`/global-characters/${id}`, data),
   delete: (id: number) => api.del(`/global-characters/${id}`),

@@ -57,15 +57,16 @@ export function isEpisodeAssetImagesPending(episodeId: number) {
 export function characterImagePrompt(char: { name: string; appearance?: string | null; physique?: string | null; description?: string | null; styling?: string | null }, stylePrompt = '') {
   return [
     stylePrompt || '',
+    '16:9 横版角色定妆照，角色设定参考图',
+    '左侧为正脸特写，头部和肩部完整入镜；右侧并列展示正面、90 度侧面、背面三张等高全身视图',
+    '全身视图从头顶到脚底完整入镜，中性 A 字站姿，等高并排、间距均匀、头顶脚底对齐',
     char.name,
     char.appearance || char.description || '人物立绘',
     char.physique || '',
     char.styling || '',
-    '16:9 横版角色定妆照',
-    '半身角色海报构图',
-    '正面',
+    '正脸特写与三张全身视图的脸、发型和服装完全一致，中性表情',
     '高质量',
-    '白色背景',
+    '纯白背景，柔和均匀的棚拍光，无文字、标签、水印，无手持道具或其他人物',
   ].filter(Boolean).join(', ')
 }
 
@@ -246,7 +247,24 @@ async function submitAssetImage(kind: AssetKind, id: number, options: AssetImage
     const finalPrompt = await ensureCharacterFinalPrompt(char, options.episodeId, false, { ...textOpts, forImageSubmission: true })
     const current = await mustCharacter(id)
     if (current.imageRevision !== char.imageRevision) throw new Error('角色资料已更新，请重新生成图片')
-    const prompt = finalPrompt || characterImagePrompt(char, stylePrompt)
+    const [session] = await db.select().from(schema.rpgSessions).where(and(
+      eq(schema.rpgSessions.dramaId, char.dramaId), eq(schema.rpgSessions.episodeId, options.episodeId),
+    ))
+    let worldPortrait = false
+    try {
+      const player = session?.playerCharacter ? JSON.parse(session.playerCharacter) : null
+      worldPortrait = player?.project_character_id === id && player?.world_portrait_identity === true
+    } catch { /* 旧对局可能没有有效的主角快照。 */ }
+    const prompt = [
+      finalPrompt || characterImagePrompt(char, stylePrompt),
+      worldPortrait ? [
+        '保持参考人物的同一张脸、五官、年龄感和身体体型比例，固定外貌和固定身材不可改变。',
+        `固定外貌：${char.appearance || char.description || '保持参考人物面容'}`,
+        `固定身材：${char.physique || '保持参考人物身体比例'}`,
+        `本世界发型、妆容、服装和配饰：${char.styling || ''}`,
+        '参考图仅用于确认人物身份和体型；旧发型、妆容、服装和配饰以本世界妆造为准。',
+      ].join('\n') : '',
+    ].filter(Boolean).join('\n\n')
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: options.episodeId, dramaId: char.dramaId })
     const taskId = await generateImage({
       characterId: id,
@@ -255,6 +273,7 @@ async function submitAssetImage(kind: AssetKind, id: number, options: AssetImage
       model: options.model || undefined,
       size: CHARACTER_IMAGE_SIZE,
       referenceImages,
+      requireReferenceImages: worldPortrait && referenceImages.length > 0,
       characterImageRevision: char.imageRevision,
       configId,
       frameType: ASSET_REFERENCE_FRAME,
@@ -339,7 +358,7 @@ async function loadEpisodeAssetIds(dramaId: number, episodeId: number) {
   }
 }
 
-async function latestAssetTask(kind: AssetKind, id: number, revision?: number) {
+export async function latestAssetTask(kind: AssetKind, id: number, revision?: number) {
   const column = kind === 'character'
     ? schema.sysTask.characterId
     : kind === 'scene'

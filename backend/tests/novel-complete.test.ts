@@ -171,6 +171,31 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].init.headers['User-Agent'], undefined)
   })
 
+  test('short structured tasks use their own output and timeout budgets across providers', async () => {
+    for (const config of [
+      textConfig(),
+      textConfig({ baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' }),
+      textConfig({ provider: 'gemini', baseUrl: 'https://gemini.example', model: 'gemini-2.0-flash' }),
+    ]) {
+      const gemini = config.provider === 'gemini'
+      const officialOpenAI = config.baseUrl.includes('api.openai.com')
+      const body = JSON.stringify(gemini
+        ? { candidates: [{ content: { parts: [{ text: '角色资料' }] } }] }
+        : { choices: [{ message: { content: '角色资料' } }] })
+      const { fetchImpl, requests } = scriptedFetch([{ body }])
+      const { result, timeouts } = await withTimeoutSpy(() => completeNovelPrompt(PROMPT, {
+        config, fetchImpl, maxTokens: 4096, timeoutMs: 120_000,
+      }))
+      assert.equal(result, '角色资料')
+      assert.deepEqual(timeouts, [120_000])
+      if (gemini) assert.equal(requests[0].body.generationConfig.maxOutputTokens, 4096)
+      else if (officialOpenAI) {
+        assert.equal(requests[0].body.max_completion_tokens, 4096)
+        assert.equal(requests[0].body.max_tokens, undefined)
+      } else assert.equal(requests[0].body.max_tokens, 4096)
+    }
+  })
+
   test('keeps an explicit temperature of 0', async () => {
     const { fetchImpl, requests } = scriptedFetch([{
       body: sse([chatDelta({ content: '零温' })]),
@@ -219,6 +244,77 @@ describe('completeNovelPrompt streaming', { concurrency: false }, () => {
     assert.equal(requests[0].body.model, 'grok-4.7')
     assert.equal(requests[1].body.model, 'gpt-6.1-sol')
     assert.equal(requests[1].init.headers.Authorization, 'Bearer gpt-key')
+  })
+
+  test('switches text config after a timeout without repeating the slow request', async () => {
+    const requests: any[] = []
+    const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}'))
+      requests.push(body)
+      if (body.model === 'grok-4.7') throw new DOMException('The operation timed out', 'TimeoutError')
+      return new Response(chatStream(['备用角色资料']))
+    }) as typeof fetch
+    const { result, timeouts } = await withTimeoutSpy(() => completeNovelPrompt(PROMPT, {
+      configs: [textConfig(), textConfig({ model: 'gpt-6.1-sol' })],
+      fetchImpl, timeoutMs: 120_000, maxTokens: 4096,
+    }))
+    assert.equal(result, '备用角色资料')
+    assert.deepEqual(requests.map(body => body.model), ['grok-4.7', 'gpt-6.1-sol'])
+    assert.deepEqual(requests.map(body => body.max_tokens), [4096, 4096])
+    assert.deepEqual(timeouts, [120_000, 120_000])
+  })
+
+  test('recognizes a timeout while reading a chat or Gemini stream', async (t) => {
+    const controllers: AbortController[] = []
+    t.mock.method(AbortSignal, 'timeout', () => {
+      const controller = new AbortController()
+      controllers.push(controller)
+      return controller.signal
+    })
+    for (const config of [textConfig(), textConfig({ provider: 'gemini', baseUrl: 'https://gemini.example' })]) {
+      let calls = 0
+      const fetchImpl = (async () => {
+        calls += 1
+        if (calls === 1) {
+          return new Response(new ReadableStream({
+            start(stream) {
+              controllers.at(-1)!.abort(new DOMException('The operation timed out', 'TimeoutError'))
+              stream.error(new DOMException('The operation was aborted', 'AbortError'))
+            },
+          }))
+        }
+        return new Response(chatStream(['完整角色资料']))
+      }) as typeof fetch
+      const result = await completeNovelPrompt(PROMPT, {
+        configs: [config, textConfig({ model: 'gpt-6.1-sol' })], fetchImpl,
+      })
+      assert.equal(result, '完整角色资料')
+      assert.equal(calls, 2)
+    }
+  })
+
+  test('keeps the timeout identifiable when all text configs time out', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      throw new DOMException('The operation timed out', 'TimeoutError')
+    }) as typeof fetch
+    await assert.rejects(() => completeNovelPrompt(PROMPT, {
+      configs: [textConfig(), textConfig({ model: 'gpt-6.1-sol' })], fetchImpl,
+    }), (error: unknown) => error instanceof Error && error.name === 'TimeoutError')
+    assert.equal(calls, 2)
+  })
+
+  test('does not switch text config for a cancellation unrelated to the timeout', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      throw new DOMException('The operation was aborted', 'AbortError')
+    }) as typeof fetch
+    await assert.rejects(() => completeNovelPrompt(PROMPT, {
+      configs: [textConfig(), textConfig({ model: 'gpt-6.1-sol' })], fetchImpl,
+    }), (error: unknown) => error instanceof Error && error.name === 'AbortError')
+    assert.equal(calls, 1)
   })
 
   test('retries a dropped connection and then reads the next text config', async () => {

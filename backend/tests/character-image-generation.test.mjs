@@ -11,7 +11,9 @@ test('character image generation uses 16:9 asset size', () => {
 
   assert.match(source, /CHARACTER_IMAGE_SIZE = '1920x1080'/)
   assert.match(source, /16:9 横版角色定妆照/)
-  assert.match(source, /半身角色海报构图/)
+  assert.match(source, /左侧为正脸特写/)
+  assert.match(source, /正面、90 度侧面、背面三张等高全身视图/)
+  assert.doesNotMatch(source, /半身角色海报构图/)
   assert.match(source, /size: CHARACTER_IMAGE_SIZE/)
   assert.match(route, /enqueueAssetReferenceImage\('character'/)
   assert.match(read('src/routes/scenes.ts'), /enqueueAssetReferenceImage\('scene'/)

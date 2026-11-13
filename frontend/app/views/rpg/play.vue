@@ -18,6 +18,13 @@
             <span>{{ session.player_character.role }}</span>
           </div>
         </div>
+        <p v-if="session.player_character.image_status === 'processing'" class="character-image-status dim" role="status">本世界妆造正在生成，可先开始故事。</p>
+        <div v-else-if="session.player_character.image_status === 'failed'" class="character-image-status" role="status">
+          <span>{{ session.player_character.image_error || '本世界妆造生成失败，请检查图片服务后重试。' }}</span>
+          <button class="text-action" type="button" :disabled="retryingPlayerImage" @click="retryPlayerImage">
+            {{ retryingPlayerImage ? '提交中…' : '重试生成' }}
+          </button>
+        </div>
         <p v-if="session.player_character.appearance" class="character-note"><b><span>固定外貌<span class="change-tag">跨世界不变</span></span></b>{{ session.player_character.appearance }}</p>
         <p v-if="session.player_character.physique" class="character-note"><b><span>固定身材<span class="change-tag">跨世界不变</span></span></b>{{ session.player_character.physique }}</p>
         <template v-for="field in playerCharacterSummaryFields" :key="field.key">
@@ -381,6 +388,7 @@ const characterPickerOpen = ref(false)
 const storyCharacterEditorOpen = ref(false)
 const savingPlayerCharacter = ref(false)
 const generatingPlayerCharacter = ref(false)
+const retryingPlayerImage = ref(false)
 const savingStoryCharacter = ref(false)
 const selectingCharacter = ref(false)
 const selectingCharacterId = ref<number | null>(null)
@@ -580,12 +588,29 @@ async function selectGlobalCharacter(character: { id: number }) {
     characterPickerOpen.value = false
     armPlatePoll()
     if (shouldPoll()) startPoll()
-    toast.success('本局主角已加入，下一幕会按当前世界适配')
+    toast.success('主角已适配当前世界，妆造正在后台生成')
   } catch (error) {
     toastError(error, { fallback: '主角没有加入本局' })
   } finally {
     selectingCharacter.value = false
     selectingCharacterId.value = null
+  }
+}
+
+async function retryPlayerImage() {
+  const character = session.value?.player_character
+  if (!character || retryingPlayerImage.value || character.image_status === 'processing') return
+  retryingPlayerImage.value = true
+  try {
+    await characterAPI.generateImage(character.project_character_id, session.value.episode_id)
+    await load()
+    armPlatePoll()
+    if (shouldPoll()) startPoll()
+    toast.success('本世界妆造正在生成')
+  } catch (error) {
+    toastError(error, { fallback: '妆造生成失败，请重试' })
+  } finally {
+    retryingPlayerImage.value = false
   }
 }
 
@@ -699,7 +724,8 @@ function armPlatePoll() {
 }
 
 function shouldPoll() {
-  return needsMediaPoll() || !!session.value?.asset_sync_pending || (platePollsLeft > 0 && platesPending())
+  return needsMediaPoll() || session.value?.player_character?.image_status === 'processing'
+    || !!session.value?.asset_sync_pending || (platePollsLeft > 0 && platesPending())
 }
 
 function startPoll() {
@@ -707,8 +733,9 @@ function startPoll() {
   if (!shouldPoll()) return
   pollTimer = setInterval(async () => {
     try {
+      const wasSyncing = !!session.value?.asset_sync_pending
       await load()
-      if (!session.value?.asset_sync_pending && platesPending() && platePollsLeft === 0) armPlatePoll()
+      if (wasSyncing && !session.value?.asset_sync_pending) armPlatePoll()
       if (platePollsLeft > 0) platePollsLeft -= 1
       if (!shouldPoll()) stopPoll()
     } catch { /* 下一轮再问 */ }
@@ -920,6 +947,7 @@ onMounted(async () => {
   try {
     await load()
     armPlatePoll()
+    if (shouldPoll()) startPoll()
     if (!session.value?.turns?.length) {
       awaitingOpening.value = true
       try {
@@ -1023,6 +1051,7 @@ onBeforeUnmount(() => {
 .player-character-summary > div { display: flex; flex-direction: column; gap: 3px; }
 .player-character-summary strong { font-size: 14px; }
 .player-character-summary span { color: var(--text-2); font-size: 12px; }
+.character-image-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
 .character-note { margin-top: 6px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
 .character-note b { margin-right: 6px; color: var(--text-3); font-weight: 600; }
 .change-tag { margin-left: 6px; color: var(--text-3); font-size: 10px; font-weight: 400; white-space: nowrap; }

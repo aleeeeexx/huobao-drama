@@ -6,7 +6,7 @@
         <h1>全局角色库</h1>
         <p class="lede">保存这个人的固定外貌、身材，以及进入不同世界后会改写的默认生活。</p>
       </div>
-      <button class="btn btn-primary" type="button" :disabled="saving || generating" @click="startNew">
+      <button class="btn btn-primary" type="button" :disabled="saving || generating || generatingImage" @click="startNew">
         <Plus :size="15" /> 新建角色
       </button>
     </header>
@@ -23,6 +23,7 @@
           :key="character.id"
           type="button"
           :class="['roster-item', { active: draft.id === character.id }]"
+          :disabled="saving || generating || generatingImage"
           @click="edit(character)"
         >
           <img v-if="character.image_url" :src="publicMediaUrl(character.image_url)" :alt="''" />
@@ -38,7 +39,7 @@
         </p>
       </section>
 
-      <form class="editor" @submit.prevent="save">
+      <form class="editor" @submit.prevent="!generatingImage && save()">
         <div class="editor-head">
           <div>
             <span class="editor-kicker">{{ draft.id ? '全局身份' : '创建身份' }}</span>
@@ -52,7 +53,7 @@
             <span>角色构想</span>
             <textarea v-model.trim="generationBrief" class="input" rows="2" maxlength="2000" placeholder="例如：一个在海边小城长大的年轻法医，擅长观察细节" />
           </label>
-          <button class="btn" type="button" :disabled="generating || !generationBrief.trim()" @click="generate">
+          <button class="btn" type="button" :disabled="saving || generating || generatingImage || !generationBrief.trim()" @click="generate">
             <Loader2 v-if="generating" :size="14" class="spin" />
             <WandSparkles v-else :size="14" />
             {{ generating ? '生成中' : '生成草稿' }}
@@ -62,7 +63,41 @@
         <section class="profile-group">
           <div>
             <h3>跨世界不变</h3>
-            <p class="field-note">脸、身材和参考形象进入任何世界都保持原样。</p>
+            <p class="field-note">脸、身材和角色图进入任何世界都保持原样。</p>
+          </div>
+          <div class="reference-generator">
+            <button
+              v-if="draft.image_url"
+              class="reference-preview"
+              type="button"
+              :aria-label="`预览${draft.name || '角色'}的角色参考图`"
+              aria-haspopup="dialog"
+              @click="openReferencePreview"
+            >
+              <img :src="publicMediaUrl(draft.image_url)" :alt="`${draft.name || '角色'}参考图`" />
+              <span><Expand :size="14" /> 点击查看大图</span>
+            </button>
+            <div v-else class="reference-placeholder">
+              <ImagePlus :size="26" />
+              <span>生成后在此显示角色参考图</span>
+            </div>
+            <div class="reference-controls">
+              <label class="field">
+                <span>参考图视觉风格</span>
+                <select v-model="imageStyle" class="input" :disabled="saving || generating || generatingImage || stylesLoading || !!styleLoadError || !stylePresets.length">
+                  <option v-if="!stylePresets.length" value="">{{ stylesLoading ? '正在加载风格…' : '暂无可用风格' }}</option>
+                  <option v-for="preset in stylePresets" :key="preset.value" :value="preset.value">{{ preset.name }}</option>
+                </select>
+                <span v-if="styleLoadError" class="field-note" role="alert">{{ styleLoadError }}</span>
+                <span v-else-if="!stylesLoading && !stylePresets.length" class="field-note">暂无启用的视觉风格，请先到设置中启用风格预设。</span>
+              </label>
+              <button class="btn" type="button" :disabled="saving || generating || generatingImage || !draft.name.trim() || !canGenerateImage" @click="generatePortrait">
+                <Loader2 v-if="generatingImage" :size="14" class="spin" />
+                <ImagePlus v-else :size="14" />
+                {{ generatingImage ? imageGenerationStage : '生成角色参考图' }}
+              </button>
+              <p class="field-note">左侧正脸特写，右侧正面、侧面、背面三张全身视图。生成前保存资料，完成后自动保存图片。</p>
+            </div>
           </div>
           <div class="editor-grid">
             <label class="field field-wide">
@@ -94,18 +129,13 @@
           </div>
         </section>
 
-        <div v-if="draft.image_url" class="reference-preview">
-          <img :src="publicMediaUrl(draft.image_url)" :alt="`${draft.name || '角色'}参考形象`" />
-          <span>身份参考图</span>
-        </div>
-
         <footer class="editor-actions">
-          <button v-if="draft.id" class="btn btn-danger" type="button" :disabled="saving || generating" @click="remove">
+          <button v-if="draft.id" class="btn btn-danger" type="button" :disabled="saving || generating || generatingImage" @click="remove">
             <Trash2 :size="14" /> 删除角色
           </button>
           <span class="action-spacer"></span>
-          <button class="btn" type="button" :disabled="saving || generating" @click="startNew">清空</button>
-          <button class="btn btn-primary" type="submit" :disabled="saving || generating || !draft.name.trim()">
+          <button class="btn" type="button" :disabled="saving || generating || generatingImage" @click="startNew">清空</button>
+          <button class="btn btn-primary" type="submit" :disabled="saving || generating || generatingImage || !draft.name.trim()">
             <Loader2 v-if="saving" :size="14" class="spin" />
             <Save v-else :size="14" />
             {{ saving ? '保存中' : '保存角色' }}
@@ -113,13 +143,27 @@
         </footer>
       </form>
     </div>
+
+    <Teleport to="body">
+      <dialog ref="referenceDialog" class="reference-dialog" aria-labelledby="reference-preview-title" @click.self="closeReferencePreview" @close="referencePreview = null">
+        <header class="reference-dialog-head">
+          <h2 id="reference-preview-title">{{ referencePreview?.title || '角色参考图' }}</h2>
+          <button class="btn btn-ghost btn-icon" type="button" aria-label="关闭预览" autofocus @click="closeReferencePreview">
+            <X :size="18" />
+          </button>
+        </header>
+        <div class="reference-dialog-body">
+          <img v-if="referencePreview" :src="referencePreview.src" :alt="referencePreview.title" />
+        </div>
+      </dialog>
+    </Teleport>
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ChevronRight, Loader2, Plus, Save, Search, ShieldCheck, Trash2, UserRound, WandSparkles } from 'lucide-vue-next'
-import { globalCharacterAPI } from '~/composables/useApi'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ChevronRight, Expand, ImagePlus, Loader2, Plus, Save, Search, ShieldCheck, Trash2, UserRound, WandSparkles, X } from 'lucide-vue-next'
+import { globalCharacterAPI, stylePresetAPI, taskAPI } from '~/composables/useApi'
 import { publicMediaUrl } from '~/composables/useMedia'
 import { toastError } from '~/composables/useToast'
 import { toast } from 'vue-sonner'
@@ -162,8 +206,17 @@ const characters = ref<GlobalCharacter[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const generating = ref(false)
+const generatingImage = ref(false)
+const imageGenerationStage = ref('')
+const stylePresets = ref<Array<{ name: string; value: string }>>([])
+const imageStyle = ref('')
+const stylesLoading = ref(true)
+const styleLoadError = ref('')
+const canGenerateImage = computed(() => !stylesLoading.value && !styleLoadError.value && stylePresets.value.some(preset => preset.value === imageStyle.value))
 const query = ref('')
 const generationBrief = ref('')
+const referenceDialog = ref<HTMLDialogElement | null>(null)
+const referencePreview = ref<{ src: string; title: string } | null>(null)
 const draft = reactive({
   id: 0,
   name: '',
@@ -183,13 +236,45 @@ const draft = reactive({
   image_url: '',
 })
 let editorVersion = 0
+let savedImageUrl = ''
+let disposed = false
+let imagePollTimer: ReturnType<typeof setTimeout> | undefined
+let releaseImagePoll: (() => void) | undefined
+
+onBeforeUnmount(() => {
+  disposed = true
+  if (imagePollTimer !== undefined) clearTimeout(imagePollTimer)
+  releaseImagePoll?.()
+})
+
+function waitForImagePoll() {
+  return new Promise<void>(resolve => {
+    releaseImagePoll = resolve
+    imagePollTimer = setTimeout(() => {
+      imagePollTimer = undefined
+      releaseImagePoll = undefined
+      resolve()
+    }, 2000)
+  })
+}
 
 const filteredCharacters = computed(() => characters.value.filter(character =>
   `${character.name} ${character.role || ''}`.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase()),
 ))
 
+function openReferencePreview() {
+  if (!draft.image_url || !referenceDialog.value) return
+  referencePreview.value = { src: publicMediaUrl(draft.image_url), title: `${draft.name || '角色'} · 角色参考图` }
+  referenceDialog.value.showModal()
+}
+
+function closeReferencePreview() {
+  referenceDialog.value?.close()
+}
+
 function startNew() {
   editorVersion += 1
+  savedImageUrl = ''
   Object.assign(draft, {
     id: 0,
     appearance: '',
@@ -201,6 +286,7 @@ function startNew() {
 
 function edit(character: GlobalCharacter) {
   editorVersion += 1
+  savedImageUrl = character.image_url || ''
   Object.assign(draft, {
     id: character.id,
     name: character.name || '',
@@ -213,11 +299,31 @@ function edit(character: GlobalCharacter) {
 }
 
 async function load() {
-  characters.value = await globalCharacterAPI.list() || []
+  const loaded = await globalCharacterAPI.list() || []
+  if (!disposed) characters.value = loaded
 }
 
-async function save() {
-  if (saving.value || !draft.name.trim()) return
+async function loadStyles() {
+  stylesLoading.value = true
+  styleLoadError.value = ''
+  try {
+    const presets = await stylePresetAPI.list() || []
+    if (disposed) return
+    stylePresets.value = presets
+    if (!presets.some(preset => preset.value === imageStyle.value)) imageStyle.value = presets[0]?.value || ''
+  } catch {
+    if (!disposed) {
+      stylePresets.value = []
+      imageStyle.value = ''
+      styleLoadError.value = '视觉风格加载失败，请刷新页面后重试。'
+    }
+  } finally {
+    if (!disposed) stylesLoading.value = false
+  }
+}
+
+async function save(): Promise<GlobalCharacter | null> {
+  if (disposed || saving.value || generating.value || !draft.name.trim()) return null
   saving.value = true
   const submittedVersion = editorVersion
   const submittedDraft = { ...draft }
@@ -226,31 +332,100 @@ async function save() {
     name: submittedDraft.name.trim(),
     appearance: submittedDraft.appearance,
     physique: submittedDraft.physique,
-    image_url: submittedDraft.image_url || null,
+    // 后台生图可能在草稿载入后更新图片；未手动修改时不提交旧地址。
+    ...(!submittedDraft.id || submittedDraft.image_url !== savedImageUrl
+      ? { image_url: submittedDraft.image_url || null }
+      : {}),
   }
   try {
     const saved = submittedDraft.id
       ? await globalCharacterAPI.update(submittedDraft.id, payload)
       : await globalCharacterAPI.create(payload)
+    if (disposed) return null
     await load()
+    if (disposed) return null
     if (editorVersion === submittedVersion) {
       const unchanged = Object.entries(submittedDraft).every(([key, value]) => draft[key as keyof typeof draft] === value)
       if (unchanged) edit(saved)
-      else if (!submittedDraft.id) draft.id = saved.id
+      else {
+        if (!submittedDraft.id) draft.id = saved.id
+        savedImageUrl = saved.image_url || ''
+        if (draft.image_url === submittedDraft.image_url) draft.image_url = savedImageUrl
+      }
     }
     toast.success('全局角色已保存')
+    return saved
   } catch (error) {
-    toastError(error, { fallback: '角色保存失败' })
+    if (!disposed) toastError(error, { fallback: '角色保存失败' })
+    return null
   } finally {
-    saving.value = false
+    if (!disposed) saving.value = false
+  }
+}
+
+async function generatePortrait() {
+  if (disposed || generatingImage.value || generating.value || saving.value || !draft.name.trim() || !canGenerateImage.value) return
+  const style = imageStyle.value
+  generatingImage.value = true
+  imageGenerationStage.value = '保存角色资料…'
+  try {
+    const saved = await save()
+    if (disposed || !saved?.id) return
+    const submittedVersion = editorVersion
+    imageGenerationStage.value = '准备参考图提示词…'
+    const result = await globalCharacterAPI.generateImage(saved.id, style)
+    if (disposed) return
+    const taskId = Number(result?.image_generation_id)
+    if (!Number.isInteger(taskId) || taskId <= 0) throw new Error('图片任务没有提交')
+    imageGenerationStage.value = '角色参考图生成中'
+
+    const deadline = Date.now() + 600_000
+    while (!disposed && Date.now() < deadline) {
+      const task = await taskAPI.get(taskId)
+      if (disposed) return
+      if (task?.status === 'completed') {
+        await load()
+        if (disposed) return
+        const updated = characters.value.find(character => character.id === saved.id)
+        if (editorVersion === submittedVersion && draft.id === saved.id && updated) {
+          if (draft.image_url === savedImageUrl) draft.image_url = updated.image_url || ''
+          savedImageUrl = updated.image_url || ''
+        }
+        const generatedImageUrl = publicMediaUrl(task.localPath || task.resultUrl)
+        if (!generatedImageUrl || generatedImageUrl !== publicMediaUrl(updated?.image_url)) {
+          toast.warning(updated
+            ? '角色信息或图片已变化，本次生成图未应用，可检查资料后重新生成'
+            : '角色已删除，本次生成图未应用', generatedImageUrl ? {
+            action: {
+              label: '查看生成图',
+              onClick: () => window.open(generatedImageUrl, '_blank', 'noopener,noreferrer'),
+            },
+          } : undefined)
+          return
+        }
+        toast.success('角色参考图已生成，可在后续世界中复用')
+        return
+      }
+      if (!task || task.status === 'failed') throw new Error(task?.errorMsg || '角色图生成失败')
+      await waitForImagePoll()
+    }
+    if (!disposed) throw new Error('角色图生成超时，可稍后重新打开角色库查看')
+  } catch (error) {
+    if (!disposed) toastError(error, { fallback: '角色图生成失败' })
+  } finally {
+    if (!disposed) {
+      generatingImage.value = false
+      imageGenerationStage.value = ''
+    }
   }
 }
 
 async function generate() {
-  if (generating.value || !generationBrief.value.trim()) return
+  if (disposed || saving.value || generating.value || generatingImage.value || !generationBrief.value.trim()) return
   generating.value = true
   try {
     const generated = await globalCharacterAPI.generate(generationBrief.value.trim())
+    if (disposed) return
     editorVersion += 1
     Object.assign(draft, {
       id: 0,
@@ -263,35 +438,36 @@ async function generate() {
     })
     toast.success('角色草稿已生成，可继续编辑后保存')
   } catch (error) {
-    toastError(error, { fallback: '角色草稿生成失败' })
+    if (!disposed) toastError(error, { fallback: '角色草稿生成失败' })
   } finally {
-    generating.value = false
+    if (!disposed) generating.value = false
   }
 }
 
 async function remove() {
-  if (!draft.id || saving.value || !window.confirm(`删除全局角色「${draft.name}」？已开始的世界不受影响。`)) return
+  if (disposed || !draft.id || saving.value || generating.value || generatingImage.value || !window.confirm(`删除全局角色「${draft.name}」？已开始的世界不受影响。`)) return
   const characterId = draft.id
   saving.value = true
   try {
     await globalCharacterAPI.delete(characterId)
+    if (disposed) return
     characters.value = characters.value.filter(character => character.id !== characterId)
     if (draft.id === characterId) startNew()
     toast.success('全局角色已删除')
   } catch (error) {
-    toastError(error, { fallback: '角色删除失败' })
+    if (!disposed) toastError(error, { fallback: '角色删除失败' })
   } finally {
-    saving.value = false
+    if (!disposed) saving.value = false
   }
 }
 
 onMounted(async () => {
   try {
-    await load()
+    await Promise.all([load(), loadStyles()])
   } catch (error) {
-    toastError(error, { fallback: '全局角色库载入失败' })
+    if (!disposed) toastError(error, { fallback: '全局角色库载入失败' })
   } finally {
-    loading.value = false
+    if (!disposed) loading.value = false
   }
 })
 </script>
@@ -325,6 +501,9 @@ onMounted(async () => {
 .generation-tools textarea { width: 100%; color: var(--text-0); font: inherit; font-size: 13px; resize: vertical; }
 .saved-mark { display: flex; align-items: center; gap: 6px; color: var(--success); font-size: 12px; }
 .profile-group { display: grid; gap: 14px; padding-top: 18px; }
+.reference-generator { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 18px; }
+.reference-controls { display: grid; gap: 12px; }
+.reference-controls > .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; justify-self: start; }
 .profile-group h3 { margin: 0; font-size: 15px; }
 .field-note { margin: 0; color: var(--text-2); font-size: 13px; font-weight: 400; line-height: 1.6; }
 .change-tag { margin-left: 8px; color: var(--text-3); font-size: 12px; font-weight: 400; }
@@ -333,8 +512,18 @@ onMounted(async () => {
 .field-wide { grid-column: 1 / -1; }
 .field .input { width: 100%; color: var(--text-0); font: inherit; font-weight: 400; font-size: 13px; }
 .field textarea { resize: vertical; min-height: 62px; line-height: 1.55; }
-.reference-preview { display: flex; align-items: center; gap: 10px; padding: 10px 0; color: var(--text-3); font-size: 12px; }
-.reference-preview img { width: 62px; height: 62px; border: 1px solid var(--border); border-radius: 4px; object-fit: cover; }
+.reference-preview, .reference-placeholder { width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); }
+.reference-preview { position: relative; display: block; padding: 0; overflow: hidden; cursor: zoom-in; }
+.reference-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.reference-preview span { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; color: #fff; background: rgba(0, 0, 0, 0.65); border-radius: 4px; font-size: 12px; }
+.reference-preview:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.reference-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); font-size: 12px; }
+.reference-dialog { width: min(1200px, calc(100vw - 40px)); max-width: none; max-height: calc(100dvh - 40px); margin: auto; padding: 0; color: var(--text-0); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; }
+.reference-dialog::backdrop { background: rgba(0, 0, 0, 0.75); }
+.reference-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.reference-dialog-head h2 { margin: 0; font-size: 15px; }
+.reference-dialog-body { display: flex; align-items: center; justify-content: center; padding: 16px; }
+.reference-dialog-body img { display: block; max-width: 100%; max-height: calc(100dvh - 132px); object-fit: contain; }
 .editor-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .action-spacer { flex: 1; }
 .spin { animation: spin 1s linear infinite; }
@@ -345,6 +534,7 @@ onMounted(async () => {
   .library-layout { grid-template-columns: 1fr; }
   .roster { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 14px; }
   .roster-item { width: 50%; display: inline-flex; vertical-align: top; }
+  .reference-generator { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 480px) { .roster-item { width: 100%; } .editor-grid { grid-template-columns: 1fr; } .field-wide { grid-column: auto; } .generation-tools { grid-template-columns: 1fr; } }
 </style>
