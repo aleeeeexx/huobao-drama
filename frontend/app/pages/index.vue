@@ -24,6 +24,7 @@
           type="button"
           :class="['hero-option', { selected: selectedCharacterId === character.id }]"
           :aria-pressed="selectedCharacterId === character.id"
+          :disabled="starting || generatingWorld"
           @click="selectedCharacterId = selectedCharacterId === character.id ? null : character.id"
         >
           <img v-if="character.image_url" :src="publicMediaUrl(character.image_url)" :alt="''" />
@@ -47,7 +48,7 @@
         <h2>{{ world.title }}</h2>
         <p class="tagline">{{ world.tagline }}</p>
         <p class="premise">{{ world.premise }}</p>
-        <button class="btn btn-primary" type="button" :disabled="starting" @click="enterWorld(world)">
+        <button class="btn btn-primary" type="button" :disabled="starting || generatingWorld" @click="enterWorld(world)">
           {{ starting ? (selectedCharacterId ? '正在适配主角…' : '正在准备世界…') : `进入${world.title}` }}
         </button>
       </article>
@@ -56,23 +57,39 @@
     <section class="panel custom">
       <div>
         <h2>自己开一个世界</h2>
-        <p class="dim">名字和一段设定就够。说书人会按你写的规矩开场。</p>
+        <p class="dim">写下一句话，让 AI 补全世界；也可以直接填写下方设定。</p>
       </div>
+      <form class="world-generator" :aria-busy="generatingWorld" @submit.prevent="generateWorld">
+        <label class="field">
+          <span class="field-label">一句话创意</span>
+          <textarea v-model.trim="worldConcept" class="input" rows="2" maxlength="2000" placeholder="例如：在只能用记忆交易的城市里寻找失踪的姐姐" aria-describedby="world-generation-hint" :disabled="starting || generatingWorld" required></textarea>
+        </label>
+        <div class="generation-actions">
+          <p id="world-generation-hint" class="dim">生成后可编辑，再开始世界。重新生成会替换下方表单内容。</p>
+          <button class="btn btn-primary" type="submit" :disabled="starting || generatingWorld || !worldConcept.trim()" aria-live="polite">
+            {{ generatingWorld ? '正在生成世界…' : 'AI 生成世界' }}
+          </button>
+        </div>
+      </form>
       <form class="custom-form" @submit.prevent="enterCustom">
         <label class="field">
           <span class="field-label">世界名称</span>
-          <input v-model.trim="custom.title" class="input" maxlength="40" placeholder="例如：潮声邮局" required />
+          <input v-model.trim="custom.title" class="input" maxlength="40" placeholder="例如：潮声邮局" :disabled="starting || generatingWorld" required />
         </label>
         <label class="field">
           <span class="field-label">类型</span>
-          <input v-model.trim="custom.genre" class="input" maxlength="20" placeholder="奇谈、校园、盗墓…" />
+          <input v-model.trim="custom.genre" class="input" maxlength="20" placeholder="奇谈、校园、盗墓…" :disabled="starting || generatingWorld" />
+        </label>
+        <label class="field field-wide">
+          <span class="field-label">世界简介</span>
+          <input v-model.trim="custom.tagline" class="input" maxlength="40" placeholder="用一句话介绍这个世界（选填）" :disabled="starting || generatingWorld" />
         </label>
         <label class="field field-wide">
           <span class="field-label">设定</span>
-          <textarea v-model.trim="custom.premise" class="input" rows="4" maxlength="2000" placeholder="你是谁，眼前有什么麻烦，世界不许打破的规矩。" required></textarea>
+          <textarea v-model.trim="custom.premise" class="input" rows="4" minlength="20" maxlength="2000" placeholder="你是谁，眼前有什么麻烦，世界不许打破的规矩。" :disabled="starting || generatingWorld" required></textarea>
         </label>
         <div class="custom-actions">
-          <button class="btn btn-primary" type="submit" :disabled="starting">
+          <button class="btn btn-primary" type="submit" :disabled="starting || generatingWorld">
             {{ starting ? (selectedCharacterId ? '正在适配主角…' : '正在准备世界…') : '开始这个世界' }}
           </button>
         </div>
@@ -109,7 +126,22 @@ const globalCharacters = ref<any[]>([])
 const selectedCharacterId = ref<number | null>(null)
 const loading = ref(true)
 const starting = ref(false)
-const custom = reactive({ title: '', genre: '', premise: '' })
+const generatingWorld = ref(false)
+const worldConcept = ref('')
+const custom = reactive({ title: '', genre: '', tagline: '', premise: '' })
+
+async function generateWorld() {
+  if (starting.value || generatingWorld.value || !worldConcept.value.trim()) return
+  generatingWorld.value = true
+  try {
+    const draft = await rpgAPI.generateWorld(worldConcept.value.trim())
+    Object.assign(custom, draft)
+  } catch (error) {
+    toastError(error, { fallback: '世界草稿生成失败，请重试' })
+  } finally {
+    generatingWorld.value = false
+  }
+}
 
 async function load() {
   const [worldRows, sessionRows, characterRows] = await Promise.all([rpgAPI.worlds(), rpgAPI.sessions(), rpgAPI.globalCharacters()])
@@ -119,7 +151,7 @@ async function load() {
 }
 
 async function enterWorld(world: { id: number }) {
-  if (starting.value) return
+  if (starting.value || generatingWorld.value) return
   starting.value = true
   try {
     const session = await rpgAPI.createSession({ world_id: world.id, global_character_id: selectedCharacterId.value || undefined })
@@ -132,12 +164,13 @@ async function enterWorld(world: { id: number }) {
 }
 
 async function enterCustom() {
-  if (starting.value) return
+  if (starting.value || generatingWorld.value) return
   starting.value = true
   try {
     const session = await rpgAPI.createSession({
       title: custom.title,
       genre: custom.genre || '原创',
+      tagline: custom.tagline,
       premise: custom.premise,
       global_character_id: selectedCharacterId.value || undefined,
     })
@@ -233,11 +266,18 @@ onMounted(async () => {
 .world-card .btn { margin-top: 8px; align-self: flex-start; }
 .skeleton-card { min-height: 280px; background: linear-gradient(90deg, var(--bg-2), var(--bg-3), var(--bg-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 .panel { padding: 20px; display: grid; gap: 16px; }
+.custom > div > .dim { font-size: 13px; line-height: 1.6; }
+.world-generator { display: grid; gap: 10px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.generation-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.generation-actions .dim { font-size: 12px; line-height: 1.6; }
+.generation-actions .btn { flex-shrink: 0; }
 .custom-form { display: grid; grid-template-columns: 1fr 180px; gap: 12px; }
 .field-wide, .custom-actions { grid-column: 1 / -1; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: 12px; font-weight: 650; color: var(--text-2); }
 textarea.input { resize: vertical; min-height: 96px; line-height: 1.6; padding: 10px 12px; }
+.world-generator textarea.input { min-height: 76px; }
+.custom .input:disabled, .hero-option:disabled { opacity: 0.6; cursor: not-allowed; }
 .continues h2 { font-size: 22px; margin-bottom: 10px; }
 .continue-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .continue-card {
@@ -256,5 +296,10 @@ textarea.input { resize: vertical; min-height: 96px; line-height: 1.6; padding: 
   .world-grid, .custom-form { grid-template-columns: 1fr; }
   .hero-picker-head { align-items: flex-start; flex-direction: column; gap: 6px; }
   .lobby-head h1 { font-size: 38px; }
+}
+@media (max-width: 600px) {
+  .lobby { padding: 20px 16px 32px; }
+  .generation-actions { align-items: flex-start; flex-direction: column; }
+  .generation-actions .btn { width: 100%; }
 }
 </style>

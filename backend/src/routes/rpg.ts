@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { badRequest, notFound, success } from '../utils/response.js'
 import { parseTurnId } from '../services/rpg/turn.js'
+import { generateWorldDraft } from '../services/rpg/world-generation.js'
 import {
   createSession,
   filmSession,
@@ -20,6 +21,15 @@ const app = new Hono()
 
 app.get('/worlds', async (c) => {
   return success(c, await listWorlds())
+})
+
+app.post('/worlds/generate', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return success(c, await generateWorldDraft(body?.concept))
+  } catch (error) {
+    return badRequest(c, error instanceof Error ? error.message : '世界草稿生成失败，请重试')
+  }
 })
 
 app.get('/sessions', async (c) => {

@@ -189,8 +189,16 @@ export const serverUpdateAPI = {
   apply: () => api.post('/server-update/apply'),
 }
 
+export interface RpgWorldDraft {
+  title: string
+  genre: string
+  tagline: string
+  premise: string
+}
+
 export const rpgAPI = {
   worlds: () => api.get('/rpg/worlds'),
+  generateWorld: (concept: string) => api.post<RpgWorldDraft>('/rpg/worlds/generate', { concept }),
   globalCharacters: () => globalCharacterAPI.list(),
   sessions: () => api.get('/rpg/sessions'),
   createSession: (data: any) => api.post('/rpg/sessions', data),
